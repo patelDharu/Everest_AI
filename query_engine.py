@@ -627,177 +627,443 @@ def analyze_question(prompt: str, start_date=None, end_date=None, context_emp_id
     matched_emp = find_employee_in_text(prompt, all_employees)
 
     # -------------------------------------------------------------
-    # INTENT 1A: Granular Multi-Recipient Conversational Handover
-    # (e.g. "Ganesh is JC, assign job 1 to Jay Patel, job 2 to Bhavik Vachhani, job 3 to Dhruv Nayak"
-    #  or "job 1 Jay Patel ko assign ho aur job 2 Bhavik Vachhani ko assign ho")
+    # INTENT 1: Unified Intelligent Job, Role & Handover Assignment Engine
+    # Handles:
+    # 1. Multi-Pair Reassignment (e.g. "Ganesh is JC, assign job 1 to Jay Patel, job 2 to Bhavik Vachhani, job 3 to Dhruv Nayak")
+    # 2. Grouped Multi-Job Reassignment (e.g. "now i want to job 1 2 and 3 is assign to the bhumi trivedi")
+    # 3. Bulk / All-Jobs Handover (e.g. "all job assign to reshma vindra", "hemratana bhimani assign all job to reshma vindra")
+    # 4. Single Numbered Job Reassignment (e.g. "job 13 assign to ganesh")
+    # 5. Specific Named Project Reassignment (e.g. "europa bathware assign to reshma vindra")
+    # 6. Specific Named Job Reassignment (e.g. "domain renewal job assign to reshma vindra", "test job assign to ganesh")
     # -------------------------------------------------------------
-    source_emp, granular_assigns = parse_granular_handover_prompt(prompt, all_employees, context_emp_id=context_emp_id)
-    if granular_assigns and (len(granular_assigns) >= 2 or (len(granular_assigns) == 1 and granular_assigns[0]["job_index"] is not None)):
-        if not source_emp and matched_emp:
-            # Ensure matched_emp is not one of the recipients
-            target_emp_ids = [a["target_emp"]["id"] for a in granular_assigns if a["target_emp"]]
-            if matched_emp["id"] not in target_emp_ids:
+    assign_words = [
+        "assign", "assigned", "transfer", "transferred", "reassign", "reassigned", 
+        "handover", "ko de do", "ko do", "ko assign", "de do", "de dena", "assign ho", "assign kar",
+        "all job", "all jobs", "sabhi job", "sab job", "sare job"
+    ]
+    is_assign_intent = any(w in p for w in assign_words)
+    
+    if is_assign_intent:
+        # --- 1. Multi-Pair Pattern (e.g. "Ganesh is JC, assign job 1 to Jay Patel, job 2 to Bhavik Vachhani, and job 3 to Dhruv Nayak") ---
+        pair_pattern = re.compile(
+            r'(?:assign\s+|reassign\s+|transfer\s+)?'
+            r'(?:the\s+)?'
+            r'(?:job\s*|item\s*)?(\d+)\s*(?::\s*)?'
+            r'(?:is\s+assign\s+to\s+|is\s+assigned\s+to\s+|assign\s+to\s+|assigned\s+to\s+|assign\s+|to\s+be\s+assigned\s+to\s+|to\s+)?'
+            r'([A-Za-z\s]+?)'
+            r'(?:\s+ko\s+assign\s+ho|\s+ko\s+assign\s+karo|\s+ko\s+assign|\s+ko\s+de\s+do|\s+ko\s+do|\s+ko)?'
+            r'(?=(?:,\s*|\s+aur\s+|\s+and\s+|\s+phir\s+|\s+job\s*\d+|\s*\.|$))',
+            re.IGNORECASE
+        )
+        pair_matches = pair_pattern.findall(prompt)
+        valid_pairs = []
+        target_ids = set()
+        for job_num_str, rec_str in pair_matches:
+            rec_clean = rec_str.strip()
+            rec_clean = re.sub(r'^(and|or|the|aur|phir)\s+', '', rec_clean, flags=re.IGNORECASE).strip()
+            rec_clean = re.sub(r'\s+from\s+.*$', '', rec_clean, flags=re.IGNORECASE).strip()
+            t_emp = find_best_employee_match(rec_clean, all_employees)
+            if t_emp:
+                target_ids.add(t_emp['id'])
+                valid_pairs.append({
+                    "job_index": int(job_num_str),
+                    "recipient_clean": rec_clean,
+                    "target_emp": t_emp
+                })
+                
+        if len(valid_pairs) >= 2:
+            p_rem = p
+            for vp in valid_pairs:
+                t_name = vp["target_emp"]["name"].lower()
+                p_rem = p_rem.replace(t_name, " ")
+                for tok in t_name.split():
+                    if len(tok) >= 3:
+                        p_rem = re.sub(rf'\b{re.escape(tok)}\b', " ", p_rem)
+            source_emp = find_employee_in_text(p_rem, all_employees)
+            if not source_emp or source_emp['id'] in target_ids:
+                if context_emp_id:
+                    source_emp = next((e for e in all_employees if str(e['id']) == str(context_emp_id)), None)
+            if not source_emp and matched_emp and matched_emp['id'] not in target_ids:
                 source_emp = matched_emp
-            
-        if source_emp:
-            active_jobs = get_employee_active_jobs(source_emp["id"])
-            if not active_jobs:
-                active_jobs = [it for it in get_employee_granular_roles(source_emp["id"]) if it["category"] == "job"]
                 
-            executed = []
-            recipients_updated = {}
-            
-            for assign in granular_assigns:
-                tgt = assign["target_emp"]
-                if not tgt:
-                    continue
-                    
-                matched_item = None
-                # Check if specific job index requested
-                if assign["job_index"] is not None and 1 <= assign["job_index"] <= len(active_jobs):
-                    matched_item = active_jobs[assign["job_index"] - 1]
-                else:
-                    # Match by name
-                    q_name = assign["raw_entity"].lower()
-                    for it in active_jobs:
-                        if q_name in it["name"].lower() or it["name"].lower() in q_name:
-                            matched_item = it
-                            break
-                            
-                if matched_item:
-                    transfer_job_to_employee(matched_item["id"], source_emp["id"], tgt["id"])
-                    executed.append({
-                        "Job Name": matched_item["name"],
-                        "Project": matched_item["project_name"],
-                        "Role Type": matched_item["role_title"],
-                        "Previous Assignee": source_emp["name"],
-                        "Reassigned To": tgt["name"],
-                        "Status": "Reassigned & Updated in DB"
-                    })
-                    recipients_updated[tgt["name"]] = tgt["id"]
-                    
-            if executed:
-                remaining_jobs = get_employee_active_jobs(source_emp["id"])
-                rem_count = len(remaining_jobs)
-                post_audit = audit_employee_responsibilities(source_emp["id"])
+            if source_emp:
+                src_jobs = get_employee_active_jobs(source_emp['id'])
+                executed = []
+                recipients_updated = {}
+                for vp in valid_pairs:
+                    idx = vp["job_index"]
+                    tgt = vp["target_emp"]
+                    if 1 <= idx <= len(src_jobs):
+                        item = src_jobs[idx - 1]
+                        transfer_job_to_employee(item['id'], source_emp['id'], tgt['id'])
+                        executed.append({
+                            "Job Name": item['name'],
+                            "Project": item['project_name'],
+                            "Role Type": item.get('role_title', 'Job Coordinator'),
+                            "Previous Assignee": source_emp['name'],
+                            "Reassigned To": tgt['name'],
+                            "Status": "Reassigned & Updated in DB"
+                        })
+                        recipients_updated[tgt['name']] = tgt['id']
+                if executed:
+                    rem_jobs = get_employee_active_jobs(source_emp['id'])
+                    rem_count = len(rem_jobs)
+                    rec_bullets = "\n".join([f"* 📈 **{r_name}:** **+{sum(1 for ex in executed if ex['Reassigned To'] == r_name)} Job(s) Assigned** (Now holds **{len(get_employee_active_jobs(r_id))} active jobs** in Everest DB)" for r_name, r_id in recipients_updated.items()])
+                    bullets = "".join([f"* 💼 **Job {idx}: {ex['Job Name']}** (Project: *{ex['Project']}*) ➔ Reassigned to **{ex['Reassigned To']}**\n" for idx, ex in enumerate(executed, 1)])
+                    rem_status_line = f"* 📉 **{source_emp['name']} (Departing Staff):** **{rem_count} Remaining Active Jobs**"
+                    if rem_count == 0:
+                        rem_status_line = f"* 📉 **{source_emp['name']} (Departing Staff):** **0 Remaining Active Jobs (All assigned jobs successfully cleared & transferred!)**"
+                        execute_update("UPDATE employees SET status = 'archived' WHERE id = ?", (source_emp["id"],))
+                    return {
+                        "answer": f"### ✅ [HANDOVER COMPLETED] Background Database Updated\n\n"
+                                  f"Successfully reallocated **{len(executed)} jobs** for **{source_emp['name']}** in the Everest database:\n\n"
+                                  f"{bullets}\n---\n"
+                                  f"**🔍 Verified Database Status:**\n"
+                                  f"{rem_status_line}\n"
+                                  f"{rec_bullets}\n"
+                                  f"* 💾 Live SQLite database updated: `jobs` and `job_allocations` reflect these changes immediately.",
+                        "df": pd.DataFrame(executed),
+                        "show_table_open": False,
+                        "sql": f"-- Live UPDATE on jobs and job_allocations from {source_emp['id']}",
+                        "metrics": {
+                            "Departing Employee": source_emp["name"],
+                            "Jobs Reassigned": len(executed),
+                            "Remaining Jobs": rem_count,
+                            "Status": "Completed (0 Jobs)" if rem_count == 0 else f"{rem_count} remaining"
+                        },
+                        "handover_completed": True,
+                        "clear_context": (rem_count == 0),
+                        "notification": {
+                            "id": f"notif_handover_{datetime.datetime.now().strftime('%M%S')}",
+                            "title": f"Handover Completed: {source_emp['name']}'s Jobs Reassigned",
+                            "category": "Handover",
+                            "icon": "✅",
+                            "message": f"Successfully reallocated {len(executed)} jobs from {source_emp['name']}. Remaining active jobs: {rem_count}.",
+                            "time": "Just now",
+                            "status": "Pending"
+                        },
+                        "chart_type": None,
+                        "insight": f"Granular handover complete. {source_emp['name']} remaining active jobs = {rem_count}."
+                    }
+
+        # --- 2. Grouped Multi-Job Pattern to ONE Recipient ---
+        multi_m = re.search(
+            r'(?:job|jobs|item|items)\s*([0-9\s,and/aur]+?)\s*'
+            r'(?:is\s+|are\s+|to\s+be\s+)?(?:assigned\s+to|assign\s+to|assign|transferred\s+to|transfer\s+to|transfer|to|\bko\b)\s*'
+            r'([A-Za-z\s]+?)(?:\s+ko\s+assign\s+ho|\s+ko\s+assign|\s+ko\s+do|\s+ko)?$',
+            prompt,
+            re.IGNORECASE
+        )
+        if not multi_m:
+            multi_m = re.search(
+                r'(?:job|jobs|item|items)\s*([0-9\s,and/aur]+?)\s+'
+                r'([A-Za-z\s]+?)\s+ko\s+(?:assign|de\s+do|do|transferred|transfer)',
+                prompt,
+                re.IGNORECASE
+            )
+        if multi_m:
+            num_str = multi_m.group(1)
+            rec_str = multi_m.group(2)
+            nums = [int(n) for n in re.findall(r'\b\d+\b', num_str)]
+            tgt_emp = find_best_employee_match(rec_str, all_employees)
+            if len(nums) > 1 and tgt_emp:
+                p_rem = p.replace(tgt_emp['name'].lower(), " ")
+                source_emp = find_employee_in_text(p_rem, all_employees)
+                if not source_emp or source_emp['id'] == tgt_emp['id']:
+                    if context_emp_id:
+                        source_emp = next((e for e in all_employees if str(e['id']) == str(context_emp_id)), None)
+                if not source_emp and matched_emp and matched_emp['id'] != tgt_emp['id']:
+                    source_emp = matched_emp
+                if source_emp:
+                    src_jobs = get_employee_active_jobs(source_emp['id'])
+                    executed = []
+                    for n in nums:
+                        if 1 <= n <= len(src_jobs):
+                            item = src_jobs[n - 1]
+                            transfer_job_to_employee(item['id'], source_emp['id'], tgt_emp['id'])
+                            executed.append({
+                                "Job Name": item['name'],
+                                "Project": item['project_name'],
+                                "Role Type": item.get('role_title', 'Job Coordinator'),
+                                "Previous Assignee": source_emp['name'],
+                                "Reassigned To": tgt_emp['name'],
+                                "Status": "Reassigned & Updated in DB"
+                            })
+                    if executed:
+                        rem_jobs = get_employee_active_jobs(source_emp['id'])
+                        rem_count = len(rem_jobs)
+                        to_active = len(get_employee_active_jobs(tgt_emp['id']))
+                        bullets = "".join([f"* 💼 **Job {idx}: {ex['Job Name']}** (Project: *{ex['Project']}*) ➔ Reassigned to **{ex['Reassigned To']}**\n" for idx, ex in enumerate(executed, 1)])
+                        rem_status_line = f"* 📉 **{source_emp['name']} (Departing Staff):** **{rem_count} Remaining Active Jobs**"
+                        if rem_count == 0:
+                            rem_status_line = f"* 📉 **{source_emp['name']} (Departing Staff):** **0 Remaining Active Jobs (All assigned jobs successfully cleared & transferred!)**"
+                            execute_update("UPDATE employees SET status = 'archived' WHERE id = ?", (source_emp["id"],))
+                        return {
+                            "answer": f"### ✅ [HANDOVER COMPLETED] Background Database Updated\n\n"
+                                      f"Successfully reallocated **{len(executed)} jobs** for **{source_emp['name']}** in the Everest database:\n\n"
+                                      f"{bullets}\n---\n"
+                                      f"**🔍 Verified Database Status:**\n"
+                                      f"{rem_status_line}\n"
+                                      f"* 📈 **{tgt_emp['name']}:** **+{len(executed)} Job(s) Assigned** (Now holds **{to_active} active jobs** in Everest DB)\n"
+                                      f"* 💾 Live SQLite database updated immediately.",
+                            "df": pd.DataFrame(executed),
+                            "show_table_open": False,
+                            "sql": f"-- Live UPDATE on jobs and job_allocations from {source_emp['id']}",
+                            "metrics": {
+                                "Departing Employee": source_emp["name"],
+                                "Jobs Reassigned": len(executed),
+                                "Remaining Jobs": rem_count,
+                                "Status": "Completed (0 Jobs)" if rem_count == 0 else f"{rem_count} remaining"
+                            },
+                            "handover_completed": True,
+                            "clear_context": (rem_count == 0),
+                            "notification": {
+                                "id": f"notif_handover_{datetime.datetime.now().strftime('%M%S')}",
+                                "title": f"Handover Completed: {source_emp['name']}'s Jobs Reassigned",
+                                "category": "Handover",
+                                "icon": "✅",
+                                "message": f"Successfully reallocated {len(executed)} jobs from {source_emp['name']} to {tgt_emp['name']}. Remaining jobs: {rem_count}.",
+                                "time": "Just now",
+                                "status": "Pending"
+                            },
+                            "chart_type": None,
+                            "insight": f"Granular handover complete. {source_emp['name']} remaining active jobs = {rem_count}."
+                        }
+
+        # --- 3. Resolve Target Recipient and Clean Entity String ---
+        target_emp = None
+        to_m = re.search(r'(?:assign\s+to|transfer\s+to|assigned\s+to|reassign\s+to|to)\s+([A-Za-z\s]+?)(?:\s+ko|\.|$)', prompt, re.IGNORECASE)
+        if to_m:
+            target_emp = find_best_employee_match(to_m.group(1), all_employees)
+        if not target_emp:
+            ko_m = re.search(r'([A-Za-z\s]+?)\s+ko\s+(?:assign|de\s+do|do|transfer)', prompt, re.IGNORECASE)
+            if ko_m:
+                target_emp = find_best_employee_match(ko_m.group(1), all_employees)
+        if not target_emp:
+            target_emp = find_employee_in_text(prompt, all_employees)
+
+        if target_emp:
+            entity_str = p
+            if to_m:
+                entity_str = entity_str.replace(to_m.group(1).lower(), ' ')
+            elif 'ko_m' in locals() and ko_m:
+                entity_str = entity_str.replace(ko_m.group(1).lower(), ' ')
                 
-                # Format recipient summary bullets
-                rec_bullets = []
-                for r_name, r_id in recipients_updated.items():
-                    r_active = len(get_employee_active_jobs(r_id))
-                    r_added = sum(1 for ex in executed if ex["Reassigned To"] == r_name)
-                    rec_bullets.append(f"* 📈 **{r_name}:** **+{r_added} Job(s) Assigned** (Now holds **{r_active} active jobs** in Everest DB)")
-                rec_summary_text = "\n".join(rec_bullets)
+            t_name = target_emp['name'].lower()
+            entity_str = entity_str.replace(t_name, " ")
+            for tok in t_name.split():
+                if len(tok) >= 3:
+                    entity_str = re.sub(rf'\b{re.escape(tok)}\b', ' ', entity_str)
+                    
+            entity_str = re.sub(r'\b(now|i|want|please|assign|assigned|transfer|transferred|reassign|to|the|job|jobs|item|items|ko|kar|do|de|aur|and|is)\b', ' ', entity_str)
+            entity_str = re.sub(r'\s+', ' ', entity_str).strip()
+
+            # Find source employee if mentioned in prompt
+            source_emp = None
+            cand_source = find_employee_in_text(entity_str, all_employees)
+            if cand_source and cand_source['id'] != target_emp['id']:
+                source_emp = cand_source
+                entity_str = entity_str.replace(source_emp['name'].lower(), " ")
+                for tok in source_emp['name'].lower().split():
+                    if len(tok) >= 3:
+                        entity_str = re.sub(rf'\b{re.escape(tok)}\b', ' ', entity_str)
+                entity_str = re.sub(r'\s+', ' ', entity_str).strip()
+            elif context_emp_id:
+                source_emp = next((e for e in all_employees if str(e['id']) == str(context_emp_id)), None)
+
+            # --- 4. Bulk Handover ("all job", "all jobs", "sabhi job") ---
+            if any(w in p for w in ["all job", "all jobs", "sabhi job", "sab job", "sare job", "everything", "all"]):
+                if source_emp and source_emp['id'] != target_emp['id']:
+                    from_jobs = get_employee_active_jobs(source_emp['id'])
+                    for fj in from_jobs:
+                        transfer_job_to_employee(fj['id'], source_emp['id'], target_emp['id'])
+                    result = reassign_employee_roles(source_emp['id'], target_emp['id'], "all")
+                    execute_update("UPDATE employees SET status = 'archived' WHERE id = ?", (source_emp['id'],))
+                    to_active_count = len(get_employee_active_jobs(target_emp['id']))
+                    return {
+                        "answer": f"### ✅ [HANDOVER COMPLETED] All Roles & Jobs Transferred\n\n"
+                                  f"Transferred all active responsibilities from **{source_emp['name']}** to **{target_emp['name']}** in the Everest database.\n\n"
+                                  f"* 💼 **Transferred Jobs:** **{len(from_jobs)} active jobs** reassigned to **{target_emp['name']}**.\n"
+                                  f"* 📋 **Projects Transferred:** {result['summary']}\n"
+                                  f"---\n"
+                                  f"**🔍 Verified Database Status:**\n"
+                                  f"* 📉 **{source_emp['name']} (Departing Staff):** **0 Remaining Active Jobs (All assigned jobs successfully cleared!)**\n"
+                                  f"* 📈 **{target_emp['name']}:** **+{len(from_jobs)} Jobs Added** (Now holds **{to_active_count} active jobs** in Everest DB)\n"
+                                  f"* 💾 Live SQLite database updated immediately.",
+                        "df": pd.DataFrame([{"Source Employee": source_emp['name'], "Successor": target_emp['name'], "Jobs Transferred": len(from_jobs), "Status": "Transferred", "Details": result['summary']}]),
+                        "show_table_open": False,
+                        "sql": f"-- Live UPDATE on projects, jobs, and allocations from {source_emp['id']} to {target_emp['id']}",
+                        "metrics": {
+                            "From": source_emp["name"],
+                            "To": target_emp["name"],
+                            "Remaining Roles": 0,
+                            "Status": "Completed (0 Jobs)"
+                        },
+                        "handover_completed": True,
+                        "clear_context": True,
+                        "notification": {
+                            "id": f"notif_bulk_{datetime.datetime.now().strftime('%M%S')}",
+                            "title": f"Bulk Handover: {source_emp['name']} ➔ {target_emp['name']}",
+                            "category": "Handover",
+                            "icon": "✅",
+                            "message": f"Transferred all {len(from_jobs)} jobs from {source_emp['name']} to {target_emp['name']}. Remaining active jobs: 0.",
+                            "time": "Just now",
+                            "status": "Pending"
+                        },
+                        "chart_type": None,
+                        "insight": f"Bulk handover complete. {source_emp['name']} remaining active jobs = 0."
+                    }
+
+            # --- 5. Single Numbered Job (e.g. "job 13 assign to ganesh", "13") ---
+            job_idx_m = re.search(r'\b(\d+)\b', entity_str)
+            job_idx = int(job_idx_m.group(1)) if job_idx_m else None
+            if job_idx and source_emp:
+                src_jobs = get_employee_active_jobs(source_emp['id'])
+                if 1 <= job_idx <= len(src_jobs):
+                    target_job = src_jobs[job_idx - 1]
+                    transfer_job_to_employee(target_job['id'], source_emp['id'], target_emp['id'])
+                    rem_jobs = get_employee_active_jobs(source_emp['id'])
+                    rem_count = len(rem_jobs)
+                    to_active = len(get_employee_active_jobs(target_emp['id']))
+                    return {
+                        "answer": f"### ✅ [JOB REASSIGNED] Live Database Updated\n\n"
+                                  f"Successfully reassigned **Job {job_idx}: {target_job['name']}** to **{target_emp['name']}**!\n\n"
+                                  f"* 💼 **Job:** {target_job['name']}\n"
+                                  f"* 📁 **Project:** {target_job['project_name']}\n"
+                                  f"* 👤 **Previous Assignee:** {source_emp['name']}\n"
+                                  f"* ➔ **New Assignee:** **{target_emp['name']}**\n"
+                                  f"---\n"
+                                  f"**🔍 Verified Database Status:**\n"
+                                  f"* 📉 **{source_emp['name']}:** **{rem_count} Remaining Active Jobs**\n"
+                                  f"* 📈 **{target_emp['name']}:** +1 Job Assigned (Now holds **{to_active} active jobs** in Everest DB)\n"
+                                  f"* 💾 Live SQLite database updated immediately.",
+                        "df": pd.DataFrame([{"Job Name": target_job['name'], "Project": target_job['project_name'], "Previous": source_emp['name'], "New Assignee": target_emp['name']}]),
+                        "show_table_open": False,
+                        "handover_completed": True,
+                        "clear_context": (rem_count == 0),
+                        "notification": {
+                            "id": f"notif_job_{datetime.datetime.now().strftime('%M%S')}",
+                            "title": f"Job Reassigned: {target_job['name']}",
+                            "category": "Handover",
+                            "icon": "✅",
+                            "message": f"Reassigned {target_job['name']} to {target_emp['name']}.",
+                            "time": "Just now",
+                            "status": "Pending"
+                        },
+                        "chart_type": None,
+                        "insight": f"Reassigned Job {job_idx} from {source_emp['name']} to {target_emp['name']}."
+                    }
+
+            # --- 6. Specific Named Project Reassignment (e.g. "europa bathware assign to reshma vindra") ---
+            matched_proj = None
+            for proj in all_projects:
+                pname = proj['name'].lower()
+                if entity_str and (entity_str == pname or entity_str in pname or pname in entity_str):
+                    matched_proj = proj
+                    break
+                    
+            if matched_proj:
+                proj_jobs = run_query("""
+                    SELECT j.id, j.name, j.jc_id, e.name as jc_name
+                    FROM jobs j
+                    LEFT JOIN employees e ON j.jc_id = e.id
+                    WHERE j.project_id = ? AND j.status IN ('In Progress', 'In Review', 'Backlog')
+                """, (matched_proj['id'],)).to_dict('records')
                 
-                bullets = ""
-                for idx, ex in enumerate(executed, 1):
-                    bullets += f"* 💼 **Job {idx}: {ex['Job Name']}** (Project: *{ex['Project']}*) ➔ Reassigned to **{ex['Reassigned To']}**\n"
+                executed = []
+                for pj in proj_jobs:
+                    owner_id = pj['jc_id'] or (source_emp['id'] if source_emp else None)
+                    owner_name = pj['jc_name'] or (source_emp['name'] if source_emp else "Previous Assignee")
+                    if owner_id:
+                        transfer_job_to_employee(pj['id'], owner_id, target_emp['id'])
+                    else:
+                        execute_update("UPDATE jobs SET jc_id = ? WHERE id = ?", (target_emp['id'], pj['id']))
+                    executed.append({"Job Name": pj['name'], "Project": matched_proj['name'], "Previous": owner_name, "New Assignee": target_emp['name']})
                     
-                rem_status_line = f"* 📉 **{source_emp['name']} (Departing Staff):** **{rem_count} Remaining Active Jobs**"
-                if rem_count == 0:
-                    rem_status_line = f"* 📉 **{source_emp['name']} (Departing Staff):** **0 Remaining Active Jobs (All assigned jobs successfully cleared & transferred!)**"
-                    execute_update("UPDATE employees SET status = 'archived' WHERE id = ?", (source_emp["id"],))
+                if source_emp:
+                    execute_update("UPDATE projects SET pc_id = ? WHERE id = ? AND pc_id = ?", (target_emp['id'], matched_proj['id'], source_emp['id']))
+                    execute_update("UPDATE projects SET sc_id = ? WHERE id = ? AND sc_id = ?", (target_emp['id'], matched_proj['id'], source_emp['id']))
                     
+                bullets = "".join([f"* 💼 **{ex['Job Name']}** (Project: *{ex['Project']}*) ➔ Reassigned to **{ex['New Assignee']}**\n" for ex in executed]) if executed else "* *Project coordinator governance transferred.*\n"
+                to_active = len(get_employee_active_jobs(target_emp['id']))
                 return {
-                    "answer": f"### ✅ [HANDOVER COMPLETED] Background Database Updated\n\n"
-                              f"Successfully reallocated **{len(executed)} jobs** for **{source_emp['name']}** in the Everest database:\n\n"
-                              f"{bullets}\n"
-                              f"---\n"
+                    "answer": f"### ✅ [PROJECT REASSIGNED] Live Database Updated\n\n"
+                              f"Successfully reassigned **Project: {matched_proj['name']}** and its active jobs to **{target_emp['name']}**!\n\n"
+                              f"{bullets}\n---\n"
                               f"**🔍 Verified Database Status:**\n"
-                              f"{rem_status_line}\n"
-                              f"{rec_summary_text}\n"
-                              f"* 💾 Live SQLite database updated: `jobs` and `job_allocations` reflect these changes immediately.",
-                    "df": pd.DataFrame(executed),
+                              f"* 📈 **{target_emp['name']}:** +{len(executed)} Job(s) Assigned (Now holds **{to_active} active jobs** in Everest DB)\n"
+                              f"* 💾 Live SQLite database updated: `projects` and `jobs` reflect these changes immediately.",
+                    "df": pd.DataFrame(executed) if executed else pd.DataFrame(),
                     "show_table_open": False,
-                    "sql": f"-- Live UPDATE on jobs and job_allocations: from {source_emp['id']}",
-                    "metrics": {
-                        "Departing Employee": source_emp["name"],
-                        "Jobs Reassigned": len(executed),
-                        "Remaining Jobs": rem_count,
-                        "Status": "Completed (0 Jobs)" if rem_count == 0 else f"{rem_count} remaining"
-                    },
                     "handover_completed": True,
-                    "clear_context": (rem_count == 0),
+                    "clear_context": False,
                     "notification": {
-                        "id": f"notif_handover_{datetime.datetime.now().strftime('%M%S')}",
-                        "title": f"Handover Completed: {source_emp['name']}'s Jobs Reassigned",
+                        "id": f"notif_proj_{datetime.datetime.now().strftime('%M%S')}",
+                        "title": f"Project Reassigned: {matched_proj['name']}",
                         "category": "Handover",
                         "icon": "✅",
-                        "message": f"Successfully reallocated {len(executed)} jobs from {source_emp['name']}. Remaining active jobs: {rem_count}.",
+                        "message": f"Transferred project {matched_proj['name']} and {len(executed)} jobs to {target_emp['name']}.",
                         "time": "Just now",
                         "status": "Pending"
                     },
                     "chart_type": None,
-                    "insight": f"Granular handover complete. {source_emp['name']} remaining active jobs = {rem_count}."
+                    "insight": f"Project {matched_proj['name']} transferred to {target_emp['name']}."
                 }
 
-    # -------------------------------------------------------------
-    # INTENT 1B: Bulk Reassignment in Chat (Single Colleague)
-    # (e.g. "Transfer all jobs to Jay Patel", "Transfer all jobs from Bhoomi to Bhavik")
-    # -------------------------------------------------------------
-    is_bulk_handover = any(w in p for w in ["reassign", "transfer", "handover", "sabhi job", "sab job", "all jobs", "sare job"])
-    if is_bulk_handover and ("to" in p or "from" in p or "ko" in p or context_emp_id is not None):
-        found_emps = []
-        for emp in all_employees:
-            name_low = emp["name"].lower()
-            if name_low in p:
-                found_emps.append((emp, p.find(name_low)))
-        
-        found_emps.sort(key=lambda x: x[1])
-        from_emp = None
-        to_emp = None
-        
-        if len(found_emps) >= 2:
-            from_emp = found_emps[0][0]
-            to_emp = found_emps[1][0]
-        elif len(found_emps) == 1 and context_emp_id:
-            to_emp = found_emps[0][0]
-            from_emp = next((e for e in all_employees if str(e['id']) == str(context_emp_id)), None)
-            
-        if from_emp and to_emp and from_emp['id'] != to_emp['id']:
-            # Transfer all active jobs
-            from_jobs = get_employee_active_jobs(from_emp["id"])
-            for fj in from_jobs:
-                transfer_job_to_employee(fj["id"], from_emp["id"], to_emp["id"])
-            result = reassign_employee_roles(from_emp["id"], to_emp["id"], "all")
-            post_jobs = get_employee_active_jobs(from_emp["id"])
-            rem_count = len(post_jobs)
-            execute_update("UPDATE employees SET status = 'archived' WHERE id = ?", (from_emp["id"],))
-            to_active_count = len(get_employee_active_jobs(to_emp["id"]))
-            
-            return {
-                "answer": f"### ✅ [HANDOVER COMPLETED] All Roles & Jobs Transferred\n\n"
-                          f"Transferred all active responsibilities from **{from_emp['name']}** to **{to_emp['name']}** in the Everest database.\n\n"
-                          f"* 💼 **Transferred Jobs:** **{len(from_jobs)} active jobs** reassigned to **{to_emp['name']}**.\n"
-                          f"* 📋 **Projects Transferred:** {result['summary']}\n"
-                          f"---\n"
-                          f"**🔍 Verified Database Status:**\n"
-                          f"* 📉 **{from_emp['name']} (Departing Staff):** **0 Remaining Active Jobs (All assigned jobs successfully cleared!)**\n"
-                          f"* 📈 **{to_emp['name']}:** **+{len(from_jobs)} Jobs Added** (Now holds **{to_active_count} active jobs** in Everest DB)\n"
-                          f"* 💾 Live SQLite database updated immediately.",
-                "df": pd.DataFrame([{"Source Employee": from_emp["name"], "Successor": to_emp["name"], "Jobs Transferred": len(from_jobs), "Status": "Transferred", "Details": result['summary']}]),
-                "show_table_open": False,
-                "sql": f"-- Live UPDATE on projects, jobs, and job_allocations from {from_emp['id']} to {to_emp['id']}",
-                "metrics": {
-                    "From": from_emp["name"],
-                    "To": to_emp["name"],
-                    "Remaining Roles": rem_count,
-                    "Status": "Completed (0 Jobs)"
-                },
-                "handover_completed": True,
-                "clear_context": True,
-                "notification": {
-                    "id": f"notif_bulk_{datetime.datetime.now().strftime('%M%S')}",
-                    "title": f"Bulk Handover: {from_emp['name']} ➔ {to_emp['name']}",
-                    "category": "Handover",
-                    "icon": "✅",
-                    "message": f"Transferred all {len(from_jobs)} jobs from {from_emp['name']} to {to_emp['name']}. Remaining active jobs: 0.",
-                    "time": "Just now",
-                    "status": "Pending"
-                },
-                "chart_type": None,
-                "insight": f"Database updated. {from_emp['name']} no longer holds active project or job allocations (0 active jobs)."
-            }
+            # --- 7. Specific Named Job Reassignment (e.g. "domain renewal job assign to reshma vindra", "test job assign to ganesh") ---
+            if entity_str and len(entity_str) >= 3:
+                sql_job = """
+                    SELECT j.id, j.name, j.jc_id, p.name as project_name, e.name as jc_name
+                    FROM jobs j
+                    JOIN projects p ON j.project_id = p.id
+                    LEFT JOIN employees e ON j.jc_id = e.id
+                    WHERE j.status IN ('In Progress', 'In Review', 'Backlog')
+                      AND LOWER(j.name) LIKE ?
+                """
+                cand_jobs = run_query(sql_job, (f"%{entity_str}%",)).to_dict('records')
+                if cand_jobs:
+                    chosen_job = cand_jobs[0]
+                    if source_emp:
+                        for cj in cand_jobs:
+                            if cj['jc_id'] == source_emp['id']:
+                                chosen_job = cj
+                                break
+                    owner_id = chosen_job['jc_id'] or (source_emp['id'] if source_emp else None)
+                    owner_name = chosen_job['jc_name'] or (source_emp['name'] if source_emp else "Previous Assignee")
+                    if owner_id:
+                        transfer_job_to_employee(chosen_job['id'], owner_id, target_emp['id'])
+                    else:
+                        execute_update("UPDATE jobs SET jc_id = ? WHERE id = ?", (target_emp['id'], chosen_job['id']))
+                    to_active = len(get_employee_active_jobs(target_emp['id']))
+                    rem_count = len(get_employee_active_jobs(owner_id)) if owner_id else 0
+                    return {
+                        "answer": f"### ✅ [JOB REASSIGNED] Live Database Updated\n\n"
+                                  f"Successfully reassigned **{chosen_job['name']}** (Project: *{chosen_job['project_name']}*) to **{target_emp['name']}**!\n\n"
+                                  f"* 💼 **Job:** {chosen_job['name']}\n"
+                                  f"* 📁 **Project:** {chosen_job['project_name']}\n"
+                                  f"* 👤 **Previous Assignee:** {owner_name}\n"
+                                  f"* ➔ **New Assignee:** **{target_emp['name']}**\n"
+                                  f"---\n"
+                                  f"**🔍 Verified Database Status:**\n"
+                                  f"* 📉 **{owner_name}:** {rem_count} Remaining Active Jobs\n"
+                                  f"* 📈 **{target_emp['name']}:** +1 Job Assigned (Now holds **{to_active} active jobs** in Everest DB)\n"
+                                  f"* 💾 Live SQLite database updated immediately.",
+                        "df": pd.DataFrame([{"Job Name": chosen_job['name'], "Project": chosen_job['project_name'], "Previous": owner_name, "New Assignee": target_emp['name']}]),
+                        "show_table_open": False,
+                        "handover_completed": True,
+                        "clear_context": (rem_count == 0),
+                        "notification": {
+                            "id": f"notif_job_{datetime.datetime.now().strftime('%M%S')}",
+                            "title": f"Job Reassigned: {chosen_job['name']}",
+                            "category": "Handover",
+                            "icon": "✅",
+                            "message": f"Reassigned {chosen_job['name']} to {target_emp['name']}.",
+                            "time": "Just now",
+                            "status": "Pending"
+                        },
+                        "chart_type": None,
+                        "insight": f"Reassigned job {chosen_job['name']} to {target_emp['name']}."
+                    }
 
     # -------------------------------------------------------------
     # INTENT 2: Collected Revenue Query
@@ -1416,6 +1682,10 @@ def reset_demo_handover_data():
     ganesh_id = "6d5eb96c-13c9-41b1-a3ad-b1229918c710"
     
     # 1. Clean previous copies
+    reshma_id = "b11aba3e-dc4c-407c-9b31-8effe60b1461"
+    execute_update("UPDATE jobs SET jc_id = ? WHERE jc_id = ? AND name NOT IN ('Mobile UI Design & Prototype', 'Backend API Architecture & DB Sync', 'Security Audit & Cloud Compliance')", (reshma_id, ganesh_id))
+    execute_update("UPDATE job_allocations SET employee_id = ? WHERE employee_id = ? AND job_id IN (SELECT id FROM jobs WHERE name NOT IN ('Mobile UI Design & Prototype', 'Backend API Architecture & DB Sync', 'Security Audit & Cloud Compliance'))", (reshma_id, ganesh_id))
+
     job_titles = [
         "Mobile UI Design & Prototype",
         "Backend API Architecture & DB Sync",
