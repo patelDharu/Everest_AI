@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+from datetime import date
 from database import get_database_status
 from query_engine import analyze_question
 
@@ -29,12 +30,6 @@ st.markdown("""
     .stChatMessage {
         border-radius: 12px;
         margin-bottom: 12px;
-    }
-    .metric-card {
-        background-color: #f8f9fa;
-        border-radius: 8px;
-        padding: 10px 15px;
-        border-left: 4px solid #E22D2D;
     }
     div[data-testid="stExpander"] {
         border-radius: 8px;
@@ -65,12 +60,33 @@ with st.sidebar:
         st.error(f"🔴 DB Error: {status.get('error', 'Disconnected')}")
     
     st.markdown("---")
+    
+    # Dynamic Date Range Filter
+    st.subheader("📅 Date Range Filter")
+    date_selection = st.date_input(
+        "Filter data between dates:",
+        value=(date(2026, 8, 1), date(2026, 9, 30)),
+        min_value=date(2026, 1, 1),
+        max_value=date(2026, 12, 31)
+    )
+    
+    start_filter, end_filter = None, None
+    if isinstance(date_selection, (tuple, list)) and len(date_selection) == 2:
+        start_filter, end_filter = date_selection
+    elif isinstance(date_selection, (tuple, list)) and len(date_selection) == 1:
+        start_filter = end_filter = date_selection[0]
+    else:
+        start_filter, end_filter = date(2026, 8, 1), date(2026, 9, 30)
+
+    st.caption(f"Active filter: `{start_filter}` to `{end_filter}`")
+    st.markdown("---")
+    
     st.subheader("💡 Quick Prompts")
     quick_prompts = [
+        "How many active projects and active jobs?",
+        "Project-wise active jobs, allocated employees and logged hours",
         "Show overdue billables and days delayed",
         "Which employees have unreviewed timesheets?",
-        "List all projects, clients, and allocated hours",
-        "Show our department pods and team members",
         "What is our revenue collected vs billed?"
     ]
     
@@ -91,14 +107,14 @@ if "messages" not in st.session_state:
     st.session_state["messages"] = [
         {
             "role": "assistant",
-            "content": "👋 **Welcome to Everest AI!** I am your 7Span intelligent assistant.\n\nYou can ask me any question about **projects, overdue billables, timesheet approvals, department pods, or revenues** in plain English or Hinglish.",
+            "content": "👋 **Welcome to Everest AI!** I can answer any question about **active projects, in-progress jobs, allocated employees, logged timesheet hours, and financial billables** across your custom date ranges.",
             "data": None
         }
     ]
 
 # ----------------- MAIN CHAT VIEW -----------------
 st.markdown("<div class='main-title'>🏔️ Everest AI Assistant</div>", unsafe_allow_html=True)
-st.markdown("<div class='sub-title'>Ask anything about 7Span Everest operations, projects, margins, and financials</div>", unsafe_allow_html=True)
+st.markdown("<div class='sub-title'>Deep-dive intelligence into 7Span projects, jobs, employee allocations, and hours</div>", unsafe_allow_html=True)
 
 # Render Chat History
 for msg in st.session_state["messages"]:
@@ -121,7 +137,7 @@ for msg in st.session_state["messages"]:
                 st.dataframe(data["df"], use_container_width=True)
             
             # Chart Visualization
-            if data.get("chart_type") == "bar" and data.get("df") is not None:
+            if data.get("chart_type") == "bar" and data.get("df") is not None and not data["df"].empty:
                 try:
                     fig = px.bar(
                         data["df"], 
@@ -146,7 +162,7 @@ for msg in st.session_state["messages"]:
                     st.code(data["sql"], language="sql")
 
 # ----------------- INPUT HANDLING -----------------
-user_input = st.chat_input("Ask a question about Everest (e.g., 'Show overdue billables' or 'Unreviewed timesheet backlog')...")
+user_input = st.chat_input("Ask any question (e.g., 'Project wise active jobs and allocated employees' or 'How many active projects?')...")
 
 # If user clicked a sidebar prompt, use it
 if selected_prompt:
@@ -160,9 +176,9 @@ if user_input:
         "data": None
     })
     
-    # 2. Process with Query Engine
+    # 2. Process with Query Engine (with active date range)
     with st.spinner("Analyzing Everest database..."):
-        result = analyze_question(user_input)
+        result = analyze_question(user_input, start_date=start_filter, end_date=end_filter)
     
     # 3. Append Assistant Response
     st.session_state["messages"].append({
