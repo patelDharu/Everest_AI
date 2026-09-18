@@ -58,13 +58,22 @@ st.markdown("""
     }
     
     /* Hide Radio Circles in Navigation - Make them look like real SaaS menu items */
-    div[data-testid="stRadio"] > div[role="radiogroup"] > label > div:first-child {
+    div[data-testid="stRadio"] input[type="radio"] {
+        display: none !important;
+    }
+    div[data-testid="stRadio"] div[role="radiogroup"] label > div:first-child:not(:last-child) {
+        display: none !important;
+    }
+    div[data-testid="stRadio"] div[role="radiogroup"] label svg {
+        display: none !important;
+    }
+    div[data-testid="stRadio"] div[role="radiogroup"] label > span:first-child {
         display: none !important;
     }
     div[data-testid="stRadio"] > div[role="radiogroup"] > label {
         display: flex !important;
         align-items: center !important;
-        padding: 8px 12px !important;
+        padding: 9px 12px !important;
         border-radius: 8px !important;
         margin-bottom: 2px !important;
         color: #475569 !important;
