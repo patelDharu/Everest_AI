@@ -473,7 +473,7 @@ def parse_granular_handover_prompt(prompt: str, all_employees: list, context_emp
         
     return source_emp, raw_assignments
 
-def analyze_question(prompt: str, start_date=None, end_date=None, context_emp_id: Optional[str] = None) -> dict:
+def analyze_question(prompt: str, start_date=None, end_date=None, context_emp_id: Optional[str] = None, **kwargs) -> dict:
     """
     Intelligently analyzes natural language questions with accurate data resolution:
     - Granular Multi-Recipient Role & Job Handover (Job 1 to A, Job 2 to B, Job 3 to C)

@@ -4,6 +4,9 @@ import streamlit as st
 import pandas as pd
 from datetime import date
 import csv_importer
+import importlib
+import query_engine
+importlib.reload(query_engine)
 from database import get_database_status, get_all_employees
 from query_engine import (
     analyze_question,
@@ -22,6 +25,7 @@ from query_engine import (
     reset_demo_handover_data
 )
 import everest_ui_renderer as ur
+importlib.reload(ur)
 
 # ----------------- PAGE CONFIGURATION -----------------
 st.set_page_config(
