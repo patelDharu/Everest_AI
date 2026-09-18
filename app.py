@@ -1,7 +1,9 @@
+import os
 import streamlit as st
 import pandas as pd
 import plotly.express as px
 from datetime import date
+import csv_importer
 from database import get_database_status, get_all_employees
 from query_engine import (
     analyze_question,
@@ -200,6 +202,73 @@ with st.expander("🔄 **Employee Exit / Layoff Handover Assistant (SOP Policy)*
             st.rerun()
     else:
         st.info("✅ This employee has no active projects, jobs, or allocations. Safe to offboard.")
+
+# ----------------- BULK CSV UPLOADER & INGESTION TOOL -----------------
+with st.expander("📁 **Upload & Sync Everest CSV Files (30+ Files Supported)**", expanded=False):
+    st.markdown("""
+    <div style='background-color: #f8fafc; padding: 12px; border-radius: 8px; border-left: 4px solid #0284c7; margin-bottom: 15px;'>
+        <b>Bulk CSV Ingestion Pipeline:</b> You can upload 30+ Everest CSV files simultaneously (Timesheets, Projects, Billables, Contracts, Allocations, Custom Reports). 
+        All files will be automatically parsed, cleaned, and synced into the database for live AI querying.
+    </div>
+    """, unsafe_allow_html=True)
+    
+    tab_upload, tab_folder = st.tabs(["📤 Drag & Drop Files (Web Uploader)", "💻 Ingest from Local Folder (D:\\Everest-AI\\data\\csvs)"])
+    
+    with tab_upload:
+        uploaded_files = st.file_uploader(
+            "Select or drop 30+ CSV files at once from your computer:",
+            type=["csv"],
+            accept_multiple_files=True,
+            key="bulk_csv_uploader"
+        )
+        
+        if uploaded_files:
+            st.info(f"Selected **{len(uploaded_files)} CSV files**. Ready to ingest into Everest Database.")
+            if st.button(f"⚡ Ingest & Sync {len(uploaded_files)} Files Now", type="primary"):
+                progress_bar = st.progress(0)
+                status_list = []
+                save_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "csvs")
+                os.makedirs(save_dir, exist_ok=True)
+                
+                for idx, uf in enumerate(uploaded_files):
+                    file_path = os.path.join(save_dir, uf.name)
+                    with open(file_path, "wb") as f_out:
+                        f_out.write(uf.getvalue())
+                    
+                    res = csv_importer.import_single_csv(uf, uf.name)
+                    status_list.append(res)
+                    progress_bar.progress((idx + 1) / len(uploaded_files))
+                
+                df_results = pd.DataFrame(status_list)
+                st.success(f"✅ Ingested {len(uploaded_files)} CSV files into Everest Database!")
+                st.dataframe(df_results[["file_name", "table_name", "rows", "status"]], use_container_width=True)
+                st.rerun()
+
+    with tab_folder:
+        local_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "csvs")
+        st.write(f"Copy/paste your CSV files into: `{local_dir}`")
+        if os.path.exists(local_dir):
+            existing_csvs = [f for f in os.listdir(local_dir) if f.lower().endswith(".csv")]
+            st.caption(f"Found **{len(existing_csvs)} CSV files** currently in this folder.")
+        else:
+            existing_csvs = []
+            
+        if st.button("🔄 Sync & Ingest Local Folder Now"):
+            results = csv_importer.import_csv_folder(local_dir)
+            if results:
+                st.success(f"✅ Ingested {len(results)} files from local folder.")
+                st.dataframe(pd.DataFrame(results)[["file_name", "table_name", "rows", "status"]], use_container_width=True)
+                st.rerun()
+            else:
+                st.warning(f"No CSV files found in `{local_dir}`. Please copy your CSV files there first.")
+
+    # Show live database catalog
+    st.markdown("---")
+    st.markdown("#### 📊 Database Table Catalog")
+    catalog = csv_importer.get_database_catalog()
+    if catalog:
+        cat_df = pd.DataFrame([{"Table Name": c["table_name"], "Total Rows": c["rows"], "Columns": c["column_count"]} for c in catalog])
+        st.dataframe(cat_df, use_container_width=True)
 
 st.markdown("---")
 

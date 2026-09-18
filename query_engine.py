@@ -405,6 +405,49 @@ def analyze_question(prompt: str, start_date=None, end_date=None) -> dict:
         }
 
     # -------------------------------------------------------------
+    # CASE 6: Dynamic Query for Uploaded Custom CSV Tables
+    # -------------------------------------------------------------
+    conn_chk = None
+    all_sqlite_tables = []
+    try:
+        import database
+        conn_chk = database.get_connection()
+        cur_chk = conn_chk.cursor()
+        cur_chk.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+        all_sqlite_tables = [row[0] for row in cur_chk.fetchall()]
+    except Exception:
+        pass
+    finally:
+        if conn_chk:
+            conn_chk.close()
+
+    matched_custom_table = None
+    standard_tables = ["projects", "jobs", "job_allocations", "timesheets", "billables", "employees", "contracts", "departments"]
+    for tbl in all_sqlite_tables:
+        tbl_clean = tbl.replace("_", " ").lower()
+        if (tbl_clean in p or tbl.lower() in p) and tbl.lower() not in standard_tables:
+            matched_custom_table = tbl
+            break
+
+    if matched_custom_table:
+        sql = f"SELECT * FROM `{matched_custom_table}` LIMIT 100;"
+        df = run_query(sql)
+        row_count = len(df)
+        col_count = len(df.columns)
+        return {
+            "answer": f"Here is the data from uploaded table **`{matched_custom_table}`** ({row_count} rows displayed, {col_count} columns).",
+            "df": df,
+            "sql": sql,
+            "metrics": {
+                "Table Name": matched_custom_table,
+                "Sample Rows": row_count,
+                "Total Columns": col_count
+            },
+            "chart_type": None,
+            "insight": f"Table `{matched_custom_table}` was imported from your CSV dataset and is ready for live operational querying."
+        }
+
+    # -------------------------------------------------------------
     # DEFAULT FALLBACK
     # -------------------------------------------------------------
     else:
