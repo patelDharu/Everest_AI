@@ -75,7 +75,7 @@ def get_database_status() -> dict:
         employees_count = cursor.fetchone()[0]
         
         return {
-            "mode": "Live MySQL" if MYSQL_CONFIG["enabled"] else "Local SQLite (Dummy DB)",
+            "mode": "Live MySQL" if MYSQL_CONFIG["enabled"] else ("Local SQLite (Real Everest Data)" if projects_count > 50 else "Local SQLite (Dummy DB)"),
             "projects": projects_count,
             "billables": billables_count,
             "timesheets": timesheets_count,

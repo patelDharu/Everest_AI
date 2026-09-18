@@ -22,11 +22,15 @@ def extract_dates_from_prompt(prompt: str):
         
     return None, None
 
-def audit_employee_responsibilities(emp_id: int) -> dict:
+def audit_employee_responsibilities(emp_id) -> dict:
     """
-    Audits all active ownerships for an employee (PC, AM, SC, JC, or allocated team member).
-    Crucial for 7Span Everest Exit Policy and Layoff/Offboarding reassignments.
+    Audits all active responsibilities for an employee:
+    - Projects managed as PC, AM, or SC
+    - Jobs managed as JC (Job Coordinator)
+    - Active jobs allocated as a team member
+    - Unreviewed timesheets
     """
+    emp_id = str(emp_id)
     # 1. Projects where employee is PC, AM, or SC
     sql_projects = """
     SELECT 
@@ -93,11 +97,13 @@ def audit_employee_responsibilities(emp_id: int) -> dict:
         "total_responsibilities": total_items
     }
 
-def reassign_employee_roles(from_emp_id: int, to_emp_id: int, reassign_type: str = "all") -> dict:
+def reassign_employee_roles(from_emp_id, to_emp_id, reassign_type: str = "all") -> dict:
     """
     Safely reassigns an exiting or laid-off employee's responsibilities to a replacement colleague.
     Updates PC, AM, SC, JC, and team member job allocations in the database.
     """
+    from_emp_id = str(from_emp_id)
+    to_emp_id = str(to_emp_id)
     changes = []
     
     # 1. Reassign PC roles
