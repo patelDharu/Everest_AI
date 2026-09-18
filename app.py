@@ -8,7 +8,9 @@ from database import get_database_status, get_all_employees
 from query_engine import (
     analyze_question,
     audit_employee_responsibilities,
-    reassign_employee_roles
+    reassign_employee_roles,
+    get_employee_granular_roles,
+    reassign_specific_entity
 )
 
 # Page Configuration
@@ -141,19 +143,12 @@ with st.expander("🔄 **Employee Exit / Layoff Handover Assistant (SOP Policy)*
     employees = get_all_employees()
     emp_options = {f"{e['name']} ({e['role']} • {e['grade']})": e["id"] for e in employees}
     
-    col_from, col_to = st.columns(2)
-    with col_from:
-        selected_from_label = st.selectbox("1. Select Exiting / Departing Employee:", list(emp_options.keys()), key="select_exit_emp")
-        from_id = emp_options[selected_from_label]
-        
-    with col_to:
-        # Filter out the exiting employee from successor list
-        successor_options = {k: v for k, v in emp_options.items() if v != from_id}
-        selected_to_label = st.selectbox("2. Select Successor / Replacement Colleague:", list(successor_options.keys()), key="select_successor_emp")
-        to_id = successor_options[selected_to_label]
+    selected_from_label = st.selectbox("1. Select Exiting / Departing Employee:", list(emp_options.keys()), key="select_exit_emp")
+    from_id = emp_options[selected_from_label]
         
     # Run Audit
     audit_data = audit_employee_responsibilities(from_id)
+    granular_items = get_employee_granular_roles(from_id)
     
     st.markdown(f"#### Active Responsibilities for **{selected_from_label.split('(')[0]}**:")
     m1, m2, m3, m4 = st.columns(4)
@@ -167,40 +162,96 @@ with st.expander("🔄 **Employee Exit / Layoff Handover Assistant (SOP Policy)*
         st.metric("Unreviewed Hours", f"{audit_data['unreviewed_hours']}h")
         
     if audit_data["total_responsibilities"] > 0:
-        tabs = st.tabs(["Projects as Coordinator", "Jobs as JC", "Allocated Team Jobs"])
-        with tabs[0]:
-            if not audit_data["projects_as_coordinator"].empty:
-                st.dataframe(audit_data["projects_as_coordinator"], use_container_width=True)
-            else:
-                st.caption("No projects managed as PC/AM/SC.")
-        with tabs[1]:
-            if not audit_data["jobs_as_jc"].empty:
-                st.dataframe(audit_data["jobs_as_jc"], use_container_width=True)
-            else:
-                st.caption("No jobs managed as JC.")
-        with tabs[2]:
-            if not audit_data["allocated_jobs"].empty:
-                st.dataframe(audit_data["allocated_jobs"], use_container_width=True)
-            else:
-                st.caption("No active job allocations.")
-
-        # Reassign Action Button
-        reassign_choice = st.radio(
-            "Select responsibilities to transfer:",
-            ["All Responsibilities", "Only Coordinator Roles (PC, AM, SC, JC)", "Only Team Member Allocations"],
+        handover_mode = st.radio(
+            "Select Handover Workflow:",
+            [
+                "🎯 Granular Multi-Recipient Handover (Assign different jobs to different people)",
+                "⚡ Bulk Handover (Reassign all roles to one person)"
+            ],
             horizontal=True
         )
-        
-        type_mapping = {
-            "All Responsibilities": "all",
-            "Only Coordinator Roles (PC, AM, SC, JC)": "jc",
-            "Only Team Member Allocations": "allocations"
-        }
-        
-        if st.button("🚀 Execute Safe Handover & Reassign in Database", type="primary", use_container_width=True):
-            result = reassign_employee_roles(from_id, to_id, type_mapping[reassign_choice])
-            st.success(f"✅ Handover Completed! {result['summary']}")
-            st.rerun()
+
+        successor_options = {k: v for k, v in emp_options.items() if v != from_id}
+        successor_list = list(successor_options.keys())
+
+        if "Granular" in handover_mode:
+            st.markdown("""
+            <div style='background-color: #f1f5f9; padding: 10px; border-radius: 6px; margin-bottom: 12px; font-size: 0.92rem;'>
+                <b>Granular Assignment Matrix:</b> Choose an individual successor for each specific project or job below. 
+                You can assign Job 1 to Colleague A, Job 2 to Colleague B, Job 3 to Colleague C, etc.
+            </div>
+            """, unsafe_allow_html=True)
+            
+            selections = {}
+            for idx, item in enumerate(granular_items, 1):
+                col_item, col_succ = st.columns([3, 2])
+                with col_item:
+                    st.markdown(f"**{idx}. {item['name']}**  \n`Role:` {item['role_title']} | `Project:` {item['project_name']}")
+                with col_succ:
+                    chosen_succ = st.selectbox(
+                        f"Assign To:",
+                        ["-- Keep Current / Skip --"] + successor_list,
+                        key=f"gran_assign_{item['category']}_{item['id']}_{idx}"
+                    )
+                    if chosen_succ != "-- Keep Current / Skip --":
+                        selections[idx - 1] = successor_options[chosen_succ]
+                st.divider()
+
+            if st.button("🚀 Apply Granular Reassignments in Database", type="primary", use_container_width=True):
+                if not selections:
+                    st.warning("Please select at least one colleague to reassign.")
+                else:
+                    updated_count = 0
+                    transferred_logs = []
+                    for item_idx, target_emp_id in selections.items():
+                        it = granular_items[item_idx]
+                        succ_name = [k for k, v in successor_options.items() if v == target_emp_id][0].split("(")[0].strip()
+                        c = reassign_specific_entity(it["category"], it["type"], it["id"], target_emp_id, from_id)
+                        updated_count += c
+                        transferred_logs.append(f"• **{it['name']}** ({it['role_title']}) ➔ **{succ_name}**")
+                    
+                    st.success(f"✅ Handover Completed! Reassigned {len(selections)} responsibilities in the Everest database.")
+                    for log in transferred_logs:
+                        st.markdown(log)
+                    st.rerun()
+
+        else:
+            selected_to_label = st.selectbox("2. Select Successor / Replacement Colleague:", successor_list, key="select_successor_emp")
+            to_id = successor_options[selected_to_label]
+            
+            tabs = st.tabs(["Projects as Coordinator", "Jobs as JC", "Allocated Team Jobs"])
+            with tabs[0]:
+                if not audit_data["projects_as_coordinator"].empty:
+                    st.dataframe(audit_data["projects_as_coordinator"], use_container_width=True)
+                else:
+                    st.caption("No projects managed as PC/AM/SC.")
+            with tabs[1]:
+                if not audit_data["jobs_as_jc"].empty:
+                    st.dataframe(audit_data["jobs_as_jc"], use_container_width=True)
+                else:
+                    st.caption("No jobs managed as JC.")
+            with tabs[2]:
+                if not audit_data["allocated_jobs"].empty:
+                    st.dataframe(audit_data["allocated_jobs"], use_container_width=True)
+                else:
+                    st.caption("No active job allocations.")
+
+            reassign_choice = st.radio(
+                "Select responsibilities to transfer:",
+                ["All Responsibilities", "Only Coordinator Roles (PC, AM, SC, JC)", "Only Team Member Allocations"],
+                horizontal=True
+            )
+            
+            type_mapping = {
+                "All Responsibilities": "all",
+                "Only Coordinator Roles (PC, AM, SC, JC)": "jc",
+                "Only Team Member Allocations": "allocations"
+            }
+            
+            if st.button("🚀 Execute Safe Handover & Reassign in Database", type="primary", use_container_width=True):
+                result = reassign_employee_roles(from_id, to_id, type_mapping[reassign_choice])
+                st.success(f"✅ Handover Completed! {result['summary']}")
+                st.rerun()
     else:
         st.info("✅ This employee has no active projects, jobs, or allocations. Safe to offboard.")
 
