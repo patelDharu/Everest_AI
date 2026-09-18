@@ -66,7 +66,7 @@ def render_status_pill(status: str):
 
     return f"""<span style="background-color:{bg}; color:{fg}; padding:3px 10px; border-radius:9999px; font-size:0.75rem; font-weight:600; display:inline-block; text-align:center;">{html.escape(status or '-')}</span>"""
 
-def render_jobs_table(df, limit: int = 15):
+def render_jobs_table(df, limit: int = 25):
     """Renders pixel-perfect Everest Jobs directory matching media_1789708516090.png"""
     if df is None or df.empty:
         return """<div style="padding:24px; text-align:center; color:#64748b; background:#fff; border-radius:8px; border:1px solid #e2e8f0;">No active jobs found.</div>"""
@@ -84,9 +84,8 @@ def render_jobs_table(df, limit: int = 15):
         start_date = str(r.get("Start Date", "-"))
         end_date = str(r.get("End Date", "-"))
         
-        # Determine row style & badge
         if is_demo:
-            row_bg = "background-color: #fffbeb;" # soft yellow highlight for demo jobs
+            row_bg = "background-color: #fffbeb;" 
             demo_badge = '<span style="background:#fef08a; color:#854d0e; font-size:0.68rem; padding:1px 6px; border-radius:4px; margin-left:6px; font-weight:700;">HANDOVER DEMO</span>'
         else:
             row_bg = "background-color: #ffffff;"
@@ -95,7 +94,7 @@ def render_jobs_table(df, limit: int = 15):
         type_icon = "⇄" if "Support" in job_name or "AMC" in job_name or "Marketing" in job_name else ("$" if "Fixed" in job_name or is_demo else "⏱")
         
         row_html = f"""
-        <tr style="{row_bg} border-bottom: 1px solid #f1f5f9; height: 46px; transition: background 0.1s ease;">
+        <tr style="{row_bg} border-bottom: 1px solid #f1f5f9; height: 46px;">
             <td style="padding: 8px 14px; color: #64748b; font-size: 0.82rem; width: 40px;">{idx + 1}</td>
             <td style="padding: 8px 14px; font-weight: 600; color: #0f172a; font-size: 0.86rem;">
                 {html.escape(job_name)} {demo_badge}
@@ -147,7 +146,7 @@ def render_jobs_table(df, limit: int = 15):
     </div>
     """
 
-def render_projects_table(df, limit: int = 15):
+def render_projects_table(df, limit: int = 25):
     """Renders pixel-perfect Everest Projects directory matching media_1789708497100.png"""
     if df is None or df.empty:
         return """<div style="padding:24px; text-align:center; color:#64748b; background:#fff; border-radius:8px; border:1px solid #e2e8f0;">No active projects found.</div>"""
@@ -165,7 +164,6 @@ def render_projects_table(df, limit: int = 15):
         p_jobs = str(r.get("Pending Jobs", "0"))
         p_bills = str(r.get("Pending Billables", "0"))
         
-        # Project mini icon badge
         proj_badge = f'<div style="width:26px; height:26px; border-radius:6px; background-color:#fee2e2; color:#dc2626; display:inline-flex; align-items:center; justify-content:center; font-size:0.75rem; font-weight:700; flex-shrink:0;">{pname[:2].upper()}</div>'
         
         row_html = f"""
@@ -223,7 +221,7 @@ def render_projects_table(df, limit: int = 15):
     </div>
     """
 
-def render_billables_table(df, limit: int = 15):
+def render_billables_table(df, limit: int = 25):
     """Renders pixel-perfect Everest Billables directory matching media_1789708516099.png"""
     if df is None or df.empty:
         return """<div style="padding:24px; text-align:center; color:#64748b; background:#fff; border-radius:8px; border:1px solid #e2e8f0;">No billables found.</div>"""
@@ -303,7 +301,7 @@ def render_billables_table(df, limit: int = 15):
     </div>
     """
 
-def render_overdue_table(df, limit: int = 15):
+def render_overdue_table(df, limit: int = 25):
     """Renders pixel-perfect Everest Overdue & Extensions table matching media_1789708547862.png"""
     if df is None or df.empty:
         return """<div style="padding:24px; text-align:center; color:#64748b; background:#fff; border-radius:8px; border:1px solid #e2e8f0;">No overdue or extended billables found.</div>"""
@@ -424,3 +422,75 @@ def render_quick_links_grid():
     </div>
     """
     return grid_html
+
+def render_inbox_table(notifications, active_tab: str = "Pending", active_category: str = "All"):
+    """
+    Renders pixel-perfect Everest Inbox view matching user screenshot media_1789739354640.png
+    """
+    filtered = []
+    for n in notifications:
+        if active_tab != "All" and n.get("status") != active_tab:
+            continue
+        if active_category != "All" and n.get("category") != active_category:
+            continue
+        filtered.append(n)
+        
+    rows_html = []
+    for n in filtered:
+        title = html.escape(str(n.get("title", "")))
+        desc = html.escape(str(n.get("message", "")))
+        time_str = html.escape(str(n.get("time", "")))
+        icon = n.get("icon", "💼")
+        
+        row_html = f"""
+        <div style="display: flex; align-items: flex-start; gap: 14px; padding: 14px 18px; border-bottom: 1px solid #f1f5f9; background-color: #ffffff; transition: background 0.12s ease; cursor: pointer;" onmouseover="this.style.backgroundColor='#f8fafc'" onmouseout="this.style.backgroundColor='#ffffff'">
+            <div style="padding-top: 2px;">
+                <input type="checkbox" style="cursor: pointer; width: 15px; height: 15px; accent-color: #dc2626; border-radius: 4px;" />
+            </div>
+            <div style="color: #64748b; font-size: 1.05rem; padding-top: 1px; flex-shrink: 0;">
+                {icon}
+            </div>
+            <div style="min-width: 220px; max-width: 240px; flex-shrink: 0;">
+                <div style="font-weight: 600; color: #0f172a; font-size: 0.88rem; line-height: 1.35;">
+                    {title}
+                </div>
+            </div>
+            <div style="flex-grow: 1; min-width: 0; padding: 0 10px;">
+                <div style="color: #475569; font-size: 0.85rem; line-height: 1.45;">
+                    {desc}
+                </div>
+            </div>
+            <div style="white-space: nowrap; text-align: right; color: #64748b; font-size: 0.80rem; flex-shrink: 0; padding-top: 2px;">
+                {time_str}
+            </div>
+        </div>
+        """
+        rows_html.append(row_html)
+        
+    if not rows_html:
+        rows_html.append("""
+        <div style="padding: 40px; text-align: center; color: #64748b; font-size: 0.9rem;">
+            🎉 All caught up! No pending notifications in this category.
+        </div>
+        """)
+        
+    inbox_container = f"""
+    <div style="background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 10px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.02); font-family: 'Inter', sans-serif;">
+        <!-- Top Action Bar matching media_1789739354640.png -->
+        <div style="display: flex; align-items: center; justify-content: space-between; padding: 10px 18px; background-color: #ffffff; border-bottom: 1px solid #f1f5f9;">
+            <div style="display: flex; align-items: center; gap: 14px;">
+                <input type="checkbox" style="cursor: pointer; width: 15px; height: 15px; accent-color: #dc2626;" title="Select all" />
+                <span style="font-size: 0.95rem; color: #64748b; cursor: pointer;" title="Refresh">🔄</span>
+            </div>
+            <div style="font-size: 0.82rem; color: #64748b;">
+                Showing <b>{len(filtered)}</b> notifications
+            </div>
+        </div>
+        
+        <!-- Notification list items -->
+        <div>
+            {''.join(rows_html)}
+        </div>
+    </div>
+    """
+    return inbox_container

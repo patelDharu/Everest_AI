@@ -115,7 +115,7 @@ st.markdown("""
         font-size: 0.85rem;
         color: #64748b;
         font-weight: 500;
-        margin-bottom: 4px;
+        margin-bottom: 6px;
     }
     .breadcrumb-current {
         color: #0f172a;
@@ -146,13 +146,21 @@ st.markdown("""
         font-size: 0.85rem;
     }
 
+    /* Floating Bot Launcher Button (matches user's red circle "Bot" in media_1789739327072.png) */
+    .floating-bot-trigger {
+        position: fixed;
+        bottom: 24px;
+        right: 28px;
+        z-index: 99999;
+    }
+
     /* Chatbot Box */
     .chatbot-card {
         background-color: #ffffff;
         border: 1px solid #e2e8f0;
-        border-radius: 12px;
+        border-radius: 14px;
         padding: 16px;
-        box-shadow: 0 4px 20px rgba(0,0,0,0.05);
+        box-shadow: 0 10px 30px rgba(0,0,0,0.08);
     }
     .chatbot-header {
         display: flex;
@@ -187,14 +195,115 @@ if "messages" not in st.session_state:
         {
             "role": "assistant",
             "content": "Hello! 👋 I'm your **Everest AI Assistant**.\n\n"
-                       "I can answer operational questions, audit project roles, or **reassign jobs in real time** when employees depart.\n\n"
-                       "💡 **Test 1-Click Handover:** Click the red button below to assign Ganesh's 3 active jobs to **Jay Patel, Bhavik Vachhani, and Dhruv Nayak**, and see the Jobs table update live on the left!",
+                       "I can look up projects, revenue, or **reassign jobs in real-time** when someone departs.\n\n"
+                       "💡 **1-Click Handover Test:** Click the red button below to assign Ganesh's 3 active jobs to **Jay Patel, Bhavik Vachhani, and Dhruv Nayak**, and see the Jobs table update live!",
             "data": None
         }
     ]
 
 if "show_assistant" not in st.session_state:
     st.session_state["show_assistant"] = True
+
+if "inbox_tab" not in st.session_state:
+    st.session_state["inbox_tab"] = "Pending"
+
+if "inbox_cat" not in st.session_state:
+    st.session_state["inbox_cat"] = "All"
+
+# Initial Everest Inbox notifications (matching screenshot media_1789739354640.png)
+if "notifications" not in st.session_state:
+    st.session_state["notifications"] = [
+        {
+            "id": "notif_1",
+            "title": "Phase 2B: Job Extension Approved",
+            "category": "Jobs",
+            "icon": "💼",
+            "message": 'Extension request for job "Phase 2B" under project "Livvy" has been approved. The new end date is 2026-09-30 for the reason "Client post-review changes". The extension request was approved by Nikhil Sharma. Please continue your work accordingly.',
+            "time": "Today at 4:01 PM",
+            "status": "Pending",
+        },
+        {
+            "id": "notif_2",
+            "title": "CR-1: Job Extension Approved",
+            "category": "Jobs",
+            "icon": "💼",
+            "message": 'Extension request for job "CR-1" under project "Literaliga" has been approved. The new end date is 2026-09-30 for the reason "Client held work". The extension request was approved by Nikhil Sharma. Please continue your work accordingly.',
+            "time": "Today at 4:01 PM",
+            "status": "Pending",
+        },
+        {
+            "id": "notif_3",
+            "title": "CR-1: Job Extension Request",
+            "category": "Jobs",
+            "icon": "💼",
+            "message": 'An extension request has been submitted for job "CR-1" under project "Literaliga". The requested new end date is 2026-09-30 with the reason "Client held work". The extension request was submitted by Bhoomi Trivedi. Please review extension request.',
+            "time": "Today at 3:45 PM",
+            "status": "Pending",
+        },
+        {
+            "id": "notif_4",
+            "title": "Phase 2B: Job Extension Request",
+            "category": "Jobs",
+            "icon": "💼",
+            "message": 'An extension request has been submitted for job "Phase 2B" under project "Livvy". The requested new end date is 2026-09-30 with the reason "Client post-review changes". The extension request was submitted by Bhoomi Trivedi. Please review extension request.',
+            "time": "Today at 3:39 PM",
+            "status": "Pending",
+        },
+        {
+            "id": "notif_5",
+            "title": "7Span Sales: Job in Review",
+            "category": "Jobs",
+            "icon": "💼",
+            "message": 'Your job "Nikunj Mail tester\'s opportunity" in project "7Span Sales" has passed its end date (17-09-2026) and is now in "In Review" status. Kindly review the job, either extend it or close it.',
+            "time": "Today at 10:00 AM",
+            "status": "Pending",
+        },
+        {
+            "id": "notif_6",
+            "title": "7Span Sales: Job in Review",
+            "category": "Jobs",
+            "icon": "💼",
+            "message": 'Your job "Clinic/Pharmacy Management Software" in project "7Span Sales" has passed its end date (17-09-2026) and is now in "In Review" status. Kindly review the job, either extend it or close it.',
+            "time": "Today at 10:00 AM",
+            "status": "Pending",
+        },
+        {
+            "id": "notif_7",
+            "title": "7Span Sales: Job in Review",
+            "category": "Jobs",
+            "icon": "💼",
+            "message": 'Your job "CertificateGate\'s opportunity" in project "7Span Sales" has passed its end date (17-09-2026) and is now in "In Review" status. Kindly review the job, either extend it or close it.',
+            "time": "Today at 10:00 AM",
+            "status": "Pending",
+        },
+        {
+            "id": "notif_8",
+            "title": "7Span Sales: Job in Review",
+            "category": "Jobs",
+            "icon": "💼",
+            "message": 'Your job "Dakko - AWS Certified Automations Experts" in project "7Span Sales" has passed its end date (17-09-2026) and is now in "In Review" status. Kindly review the job, either extend it or close it.',
+            "time": "Today at 10:00 AM",
+            "status": "Pending",
+        },
+        {
+            "id": "notif_9",
+            "title": "7Span Sales: Job Ending Soon",
+            "category": "Jobs",
+            "icon": "💼",
+            "message": 'Your job "NextWave\'s - Riyadh Expo 2030" under project "7Span Sales" is scheduled to end on 21-09-2026, which is in 3 days. Please ensure all deliverables are on track and take necessary actions for updates or handover.',
+            "time": "Today at 10:00 AM",
+            "status": "Pending",
+        },
+        {
+            "id": "notif_10",
+            "title": "Operations: Ganesh Thamangalath Exit Handover",
+            "category": "Handover",
+            "icon": "🔄",
+            "message": 'Ganesh Thamangalath has 3 active jobs ("Mobile UI Design & Prototype", "Backend API Architecture & DB Sync", "Security Audit & Cloud Compliance") pending handover to successors before relieving date.',
+            "time": "Today at 9:15 AM",
+            "status": "Pending",
+        },
+    ]
 
 # ----------------- SIDEBAR (AUTHENTIC 7SPAN EVEREST ERP) -----------------
 with st.sidebar:
@@ -209,19 +318,20 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
     
-    # Modern Navigation
+    # Modern Navigation matching Everest ERP
     nav_selection = st.radio(
         "Navigation Menu",
         [
+            "🏠 Home (Quick Links)",
+            "📥 Inbox (498)",
             "📋 Work: Jobs",
             "📁 Work: Projects",
             "💰 Work: Billables",
-            "🏠 Home (Quick Links)",
             "⏳ Reports: Overdue & Extensions",
             "🔄 Operations: Handover SOP",
             "📂 Settings: Bulk CSV Sync"
         ],
-        index=0,  # DEFAULT TO JOBS VIEW
+        index=1,  # DEFAULT TO INBOX VIEW AS REQUESTED BY USER!
         label_visibility="collapsed"
     )
     
@@ -229,7 +339,7 @@ with st.sidebar:
     
     # Assistant Toggle
     st.markdown("##### **🤖 AI Co-Pilot**")
-    assistant_toggle = st.toggle("Show Everest AI Assistant", value=st.session_state["show_assistant"])
+    assistant_toggle = st.toggle("Show Everest AI Bot", value=st.session_state["show_assistant"])
     st.session_state["show_assistant"] = assistant_toggle
     
     st.markdown("---")
@@ -264,65 +374,21 @@ with st.sidebar:
 
 # ----------------- MAIN EVEREST ERP CONTENT -----------------
 def render_erp_content():
-    # 1. JOBS DIRECTORY VIEW (DEFAULT)
-    if "Jobs" in nav_selection:
-        st.markdown("<div class='breadcrumb-text'>Work > <span class='breadcrumb-current'>Jobs</span></div>", unsafe_allow_html=True)
-        st.markdown("### **Jobs**")
-        
-        # User-friendly banner explaining the live demo
-        st.info("💡 **Live Handover Verification:** The 3 highlighted rows below belong to **Ganesh Thamangalath**. "
-                "Use the AI Assistant on the right (or 1-click handover) to reassign them to colleagues, and watch the **'JC'** column update right here in real time!")
-        
-        # Top toolbar
-        c_search, c_status, c_filter = st.columns([3.5, 1.5, 1])
-        with c_search:
-            search_job = st.text_input("Search jobs...", placeholder="🔍 Search job title, project, or coordinator...", label_visibility="collapsed", key="s_job")
-        with c_status:
-            status_job = st.selectbox("Status", ["All", "In Progress", "Completed", "In Review"], label_visibility="collapsed", key="st_job")
-        with c_filter:
-            st.button("⚙️ Filters", use_container_width=True)
+    # 1. HOME VIEW (MATCHING USER SCREENSHOT media_1789739327072.png)
+    if "Home" in nav_selection:
+        col_title, col_stat = st.columns([4, 1])
+        with col_title:
+            st.markdown("<div class='breadcrumb-text'>Home</div>", unsafe_allow_html=True)
+            st.markdown("### **Quick Links**")
+        with col_stat:
+            st.markdown("""
+            <div style="text-align: right; padding-top: 10px;">
+                <span style="background: #fee2e2; color: #dc2626; padding: 6px 14px; border-radius: 8px; font-size: 0.84rem; font-weight: 600; display: inline-flex; align-items: center; gap: 6px;">
+                    📢 What's New <span style="background: #dc2626; color: white; border-radius: 50%; width: 18px; height: 18px; font-size: 0.70rem; display: inline-flex; align-items: center; justify-content: center;">9+</span>
+                </span>
+            </div>
+            """, unsafe_allow_html=True)
             
-        df_jobs = get_everest_jobs_view(search=search_job, status=status_job, limit=25)
-        # Render authentic Everest table!
-        st.markdown(ur.render_jobs_table(df_jobs), unsafe_allow_html=True)
-
-    # 2. PROJECTS DIRECTORY VIEW
-    elif "Projects" in nav_selection:
-        st.markdown("<div class='breadcrumb-text'>Work > <span class='breadcrumb-current'>Projects</span></div>", unsafe_allow_html=True)
-        st.markdown("### **Projects**")
-        
-        c_search, c_status, c_add = st.columns([3, 1.5, 1.2])
-        with c_search:
-            search_proj = st.text_input("Search projects...", placeholder="🔍 Search project name or client...", label_visibility="collapsed", key="s_proj")
-        with c_status:
-            status_proj = st.selectbox("Status", ["All", "Active", "Archived"], label_visibility="collapsed", key="st_proj")
-        with c_add:
-            st.button("➕ Project", type="primary", use_container_width=True)
-            
-        df_proj = get_everest_projects_view(search=search_proj, status=status_proj, limit=25)
-        # Render authentic Everest table!
-        st.markdown(ur.render_projects_table(df_proj), unsafe_allow_html=True)
-
-    # 3. BILLABLES VIEW
-    elif "Billables" in nav_selection:
-        st.markdown("<div class='breadcrumb-text'>Work > <span class='breadcrumb-current'>Billables</span></div>", unsafe_allow_html=True)
-        st.markdown("### **Billables**")
-        
-        c_search, c_status = st.columns([3.5, 1.5])
-        with c_search:
-            search_bill = st.text_input("Search billables...", placeholder="🔍 Search billable item or project...", label_visibility="collapsed", key="s_bill")
-        with c_status:
-            status_bill = st.selectbox("Status", ["All", "collected", "billed", "contracted"], label_visibility="collapsed", key="st_bill")
-            
-        df_bill = get_everest_billables_view(search=search_bill, status=status_bill, limit=25)
-        # Render authentic Everest table!
-        st.markdown(ur.render_billables_table(df_bill), unsafe_allow_html=True)
-
-    # 4. HOME (QUICK LINKS) VIEW
-    elif "Home" in nav_selection:
-        st.markdown("<div class='breadcrumb-text'>Home</div>", unsafe_allow_html=True)
-        st.markdown("### **Quick Links**")
-        # Render authentic 4-column Quick Links grid!
         st.markdown(ur.render_quick_links_grid(), unsafe_allow_html=True)
 
         st.markdown("---")
@@ -337,16 +403,103 @@ def render_erp_content():
         with k4:
             st.metric("Active Staff", "437")
 
-    # 5. OVERDUE & EXTENSIONS
+    # 2. INBOX VIEW (MATCHING USER SCREENSHOT media_1789739354640.png)
+    elif "Inbox" in nav_selection:
+        # Top toolbar
+        c_title, c_tabs, c_icons = st.columns([2.5, 2.5, 2])
+        with c_title:
+            st.markdown("<div class='breadcrumb-text'>Inbox</div>", unsafe_allow_html=True)
+            st.markdown("### **Inbox**")
+        with c_tabs:
+            st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
+            tab_choice = st.radio(
+                "Filter Status",
+                ["Pending (498)", "Cleared"],
+                index=0 if st.session_state["inbox_tab"] == "Pending" else 1,
+                horizontal=True,
+                label_visibility="collapsed"
+            )
+            st.session_state["inbox_tab"] = "Pending" if "Pending" in tab_choice else "Cleared"
+        with c_icons:
+            st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
+            cat_choice = st.selectbox(
+                "Category",
+                ["All", "Jobs", "Handover", "Billables"],
+                index=0,
+                label_visibility="collapsed"
+            )
+            st.session_state["inbox_cat"] = cat_choice
+
+        # Banner with quick action
+        st.info("🔔 **Everest Action Center:** Review job extension requests, reviews, and handover tasks. "
+                "You can use the **Everest AI Bot** on the right (or floating button) to clear handover backlogs with 1 click!")
+        
+        # Render authentic Everest Inbox list
+        inbox_html = ur.render_inbox_table(
+            st.session_state["notifications"],
+            active_tab=st.session_state["inbox_tab"],
+            active_category=st.session_state["inbox_cat"]
+        )
+        st.markdown(inbox_html, unsafe_allow_html=True)
+
+    # 3. JOBS DIRECTORY VIEW (MATCHING media_1789708516090.png)
+    elif "Jobs" in nav_selection:
+        st.markdown("<div class='breadcrumb-text'>Work > <span class='breadcrumb-current'>Jobs</span></div>", unsafe_allow_html=True)
+        st.markdown("### **Jobs**")
+        
+        st.info("💡 **Live Handover Verification:** The 3 highlighted rows below belong to **Ganesh Thamangalath**. "
+                "Click the 1-Click Handover button in the **Everest AI Bot** to reassign them to colleagues and watch the **JC** column update live!")
+        
+        c_search, c_status, c_filter = st.columns([3.5, 1.5, 1])
+        with c_search:
+            search_job = st.text_input("Search jobs...", placeholder="🔍 Search job title, project, or coordinator...", label_visibility="collapsed", key="s_job")
+        with c_status:
+            status_job = st.selectbox("Status", ["All", "In Progress", "Completed", "In Review"], label_visibility="collapsed", key="st_job")
+        with c_filter:
+            st.button("⚙️ Filters", use_container_width=True)
+            
+        df_jobs = get_everest_jobs_view(search=search_job, status=status_job, limit=25)
+        st.markdown(ur.render_jobs_table(df_jobs), unsafe_allow_html=True)
+
+    # 4. PROJECTS DIRECTORY VIEW (MATCHING media_1789708497100.png)
+    elif "Projects" in nav_selection:
+        st.markdown("<div class='breadcrumb-text'>Work > <span class='breadcrumb-current'>Projects</span></div>", unsafe_allow_html=True)
+        st.markdown("### **Projects**")
+        
+        c_search, c_status, c_add = st.columns([3, 1.5, 1.2])
+        with c_search:
+            search_proj = st.text_input("Search projects...", placeholder="🔍 Search project name or client...", label_visibility="collapsed", key="s_proj")
+        with c_status:
+            status_proj = st.selectbox("Status", ["All", "Active", "Archived"], label_visibility="collapsed", key="st_proj")
+        with c_add:
+            st.button("➕ Project", type="primary", use_container_width=True)
+            
+        df_proj = get_everest_projects_view(search=search_proj, status=status_proj, limit=25)
+        st.markdown(ur.render_projects_table(df_proj), unsafe_allow_html=True)
+
+    # 5. BILLABLES VIEW (MATCHING media_1789708516099.png)
+    elif "Billables" in nav_selection:
+        st.markdown("<div class='breadcrumb-text'>Work > <span class='breadcrumb-current'>Billables</span></div>", unsafe_allow_html=True)
+        st.markdown("### **Billables**")
+        
+        c_search, c_status = st.columns([3.5, 1.5])
+        with c_search:
+            search_bill = st.text_input("Search billables...", placeholder="🔍 Search billable item or project...", label_visibility="collapsed", key="s_bill")
+        with c_status:
+            status_bill = st.selectbox("Status", ["All", "collected", "billed", "contracted"], label_visibility="collapsed", key="st_bill")
+            
+        df_bill = get_everest_billables_view(search=search_bill, status=status_bill, limit=25)
+        st.markdown(ur.render_billables_table(df_bill), unsafe_allow_html=True)
+
+    # 6. OVERDUE & EXTENSIONS (MATCHING media_1789708547862.png)
     elif "Overdue" in nav_selection:
         st.markdown("<div class='breadcrumb-text'>Reports > Billables > <span class='breadcrumb-current'>Overdue & Extensions</span></div>", unsafe_allow_html=True)
         st.markdown("### **Overdue & Extended Billables**")
         search_ext = st.text_input("Search extensions...", placeholder="🔍 Search justification or project...", key="s_ext")
         df_ext = get_everest_overdue_extensions_view(search=search_ext, limit=25)
-        # Render authentic Everest table!
         st.markdown(ur.render_overdue_table(df_ext), unsafe_allow_html=True)
 
-    # 6. OPERATIONS: HANDOVER SOP
+    # 7. OPERATIONS: HANDOVER SOP MATRIX
     elif "Handover" in nav_selection:
         st.markdown("<div class='breadcrumb-text'>Operations > <span class='breadcrumb-current'>Handover SOP Matrix</span></div>", unsafe_allow_html=True)
         st.markdown("### **Employee Handover SOP Assistant**")
@@ -402,7 +555,7 @@ def render_erp_content():
         else:
             st.success("✅ This employee has 0 active responsibilities remaining.")
 
-    # 7. BULK CSV SYNC
+    # 8. BULK CSV SYNC
     elif "Settings" in nav_selection:
         st.markdown("<div class='breadcrumb-text'>Settings > <span class='breadcrumb-current'>Bulk CSV Sync</span></div>", unsafe_allow_html=True)
         st.markdown("### **Upload & Ingest Everest CSVs (30+ Files Supported)**")
@@ -418,19 +571,28 @@ def render_erp_content():
                 st.rerun()
 
 
-# ----------------- SIDE CHATBOT COMPONENT -----------------
+# ----------------- SIDE / FLOATING AI BOT COMPONENT -----------------
 def render_ai_chatbot():
     st.markdown("""
     <div class="chatbot-card">
         <div class="chatbot-header">
             <div class="chatbot-title">
-                <span>🏔️</span> Everest AI Assistant
+                <span>🤖</span> Everest AI Bot
             </div>
-            <div class="online-badge">● Online</div>
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <div class="online-badge">● Online</div>
+            </div>
         </div>
     """, unsafe_allow_html=True)
     
-    st.caption("Ask questions, audit employees, or trigger live handovers:")
+    # Quick minimize button
+    col_sub, col_min = st.columns([3, 1])
+    with col_sub:
+        st.caption("Ask questions, audit employees, or trigger handovers:")
+    with col_min:
+        if st.button("✖ Close", key="close_bot_btn", help="Minimize Bot to full screen"):
+            st.session_state["show_assistant"] = False
+            st.rerun()
     
     # 1-Click Action Buttons for Non-Technical Users
     st.markdown("##### **⚡ Quick Actions:**")
@@ -440,6 +602,17 @@ def render_ai_chatbot():
         st.session_state["messages"].append({"role": "user", "content": prompt, "data": None})
         res = analyze_question(prompt)
         st.session_state["messages"].append({"role": "assistant", "content": res["answer"], "data": res})
+        
+        # Add live notification to Inbox
+        st.session_state["notifications"].insert(0, {
+            "id": f"notif_handover_{len(st.session_state['notifications'])}",
+            "title": "Handover Completed: Ganesh's Jobs Reallocated",
+            "category": "Handover",
+            "icon": "✅",
+            "message": "Ganesh's 3 jobs (Mobile UI, Backend API, Security Audit) have been successfully transferred to Jay Patel, Bhavik Vachhani, and Dhruv Nayak.",
+            "time": "Just now",
+            "status": "Pending"
+        })
         st.rerun()
         
     c1, c2 = st.columns(2)
@@ -461,7 +634,7 @@ def render_ai_chatbot():
     st.markdown("---")
     
     # Message History Container
-    chat_box = st.container(height=420)
+    chat_box = st.container(height=380)
     with chat_box:
         for msg in st.session_state["messages"]:
             with st.chat_message(msg["role"], avatar="🧑‍💼" if msg["role"] == "user" else "🤖"):
@@ -484,12 +657,20 @@ def render_ai_chatbot():
 
 # ----------------- MAIN LAYOUT RENDERER -----------------
 if st.session_state["show_assistant"]:
-    # 70% Authentic Everest ERP | 30% AI Copilot
-    col_main_erp, col_side_bot = st.columns([70, 30], gap="large")
+    # Split view: 72% Authentic Everest ERP | 28% AI Bot
+    col_main_erp, col_side_bot = st.columns([72, 28], gap="medium")
     with col_main_erp:
         render_erp_content()
     with col_side_bot:
         render_ai_chatbot()
 else:
-    # 100% Full Width ERP View
+    # 100% Full Width Everest ERP view!
     render_erp_content()
+    
+    # Floating Bot Launcher Button in bottom right corner (Matching user's drawn circle "Bot"!)
+    col_fab1, col_fab2 = st.columns([88, 12])
+    with col_fab2:
+        st.markdown("<div style='height: 20px;'></div>", unsafe_allow_html=True)
+        if st.button("🤖 Bot", type="primary", use_container_width=True, help="Open Everest AI Bot"):
+            st.session_state["show_assistant"] = True
+            st.rerun()
