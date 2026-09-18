@@ -308,7 +308,7 @@ def show_screenshot_ref(image_filename, caption="Original Everest ERP Screenshot
     img_path = os.path.join(SCREENSHOTS_DIR, image_filename)
     if os.path.exists(img_path):
         with st.expander(f"📸 Compare with Original Everest Screenshot ({image_filename})", expanded=False):
-            st.image(img_path, caption=caption, use_column_width=True)
+            st.image(img_path, caption=caption, use_container_width=True)
 
 # ----------------- SIDEBAR (AUTHENTIC 7SPAN EVEREST ERP) -----------------
 with st.sidebar:
@@ -644,7 +644,7 @@ def render_erp_content():
                     with cols[j]:
                         clean_title = fname.replace(".png", "").replace("_", " ")
                         st.markdown(f"##### **{clean_title}**")
-                        st.image(fpath, caption=f"Reference: {fname}", use_column_width=True)
+                        st.image(fpath, caption=f"Reference: {fname}", use_container_width=True)
                         st.markdown("---")
 
     # 13. SETTINGS & D:\everest_data_zip DATA SYNC
