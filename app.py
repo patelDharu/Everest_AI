@@ -212,6 +212,9 @@ if "messages" not in st.session_state:
 if "show_assistant" not in st.session_state:
     st.session_state["show_assistant"] = False  # Full width default; floating button opens it!
 
+if "active_handover_emp" not in st.session_state:
+    st.session_state["active_handover_emp"] = None
+
 if "inbox_tab" not in st.session_state:
     st.session_state["inbox_tab"] = "Pending"
 
@@ -700,34 +703,56 @@ def render_ai_chatbot():
         if st.button("✖ Close", key="close_bot_btn", help="Minimize Bot to full screen"):
             st.session_state["show_assistant"] = False
             st.rerun()
+            
+    # Active Handover Context Indicator
+    if st.session_state.get("active_handover_emp"):
+        cur_emp = st.session_state["active_handover_emp"]
+        c_badge, c_reset = st.columns([3.5, 1.5])
+        with c_badge:
+            st.info(f"🔄 **Departing:** **{cur_emp['name']}** ({cur_emp.get('active_jobs_count', 0)} jobs)")
+        with c_reset:
+            if st.button("✕ Reset", key="clear_ctx_btn", help="Clear departing employee context"):
+                st.session_state["active_handover_emp"] = None
+                st.rerun()
     
     st.markdown("##### **⚡ Quick Actions:**")
     
-    if st.button("⚡ Assign Ganesh's 3 Jobs (Jay, Bhavik, Dhruv)", type="primary", use_container_width=True):
-        prompt = "Ganesh is JC, assign job 1 to Jay Patel, job 2 to Bhavik Vachhani, and job 3 to Dhruv Nayak"
-        st.session_state["messages"].append({"role": "user", "content": prompt, "data": None})
-        res = analyze_question(prompt)
-        st.session_state["messages"].append({"role": "assistant", "content": res["answer"], "data": res})
-        
-        # Prepend real-time notification to Inbox
-        st.session_state["notifications"].insert(0, {
-            "id": f"notif_handover_{len(st.session_state['notifications'])}",
-            "title": "Handover Completed: Ganesh's Jobs Reallocated",
-            "category": "Handover",
-            "icon": "✅",
-            "message": "Ganesh's 3 jobs (Mobile UI, Backend API, Security Audit) have been successfully transferred to Jay Patel, Bhavik Vachhani, and Dhruv Nayak.",
-            "time": "Just now",
-            "status": "Pending"
-        })
-        st.rerun()
-        
-    c1, c2 = st.columns(2)
-    with c1:
-        if st.button("📋 My Active Jobs", use_container_width=True):
-            prompt = "Ganesh is leaving, what jobs does he have?"
+    if st.session_state.get("active_handover_emp"):
+        cur_emp = st.session_state["active_handover_emp"]
+        c_name = cur_emp["name"]
+        if st.button(f"⚡ Assign {c_name}'s Jobs to Jay & Bhavik", key="auto_assign_ctx", type="primary", use_container_width=True):
+            prompt = "job 1 Jay Patel ko assign ho aur job 2 Bhavik Vachhani ko assign ho"
+            st.session_state["messages"].append({"role": "user", "content": prompt, "data": None})
+            res = analyze_question(prompt, context_emp_id=cur_emp["id"])
+            st.session_state["messages"].append({"role": "assistant", "content": res["answer"], "data": res})
+            if res.get("handover_completed"):
+                if res.get("clear_context", False):
+                    st.session_state["active_handover_emp"] = None
+                if res.get("notification"):
+                    st.session_state["notifications"].insert(0, res["notification"])
+            st.rerun()
+    else:
+        if st.button("⚡ Assign Ganesh's 3 Jobs (Jay, Bhavik, Dhruv)", type="primary", use_container_width=True):
+            prompt = "Ganesh is JC, assign job 1 to Jay Patel, job 2 to Bhavik Vachhani, and job 3 to Dhruv Nayak"
             st.session_state["messages"].append({"role": "user", "content": prompt, "data": None})
             res = analyze_question(prompt)
             st.session_state["messages"].append({"role": "assistant", "content": res["answer"], "data": res})
+            if res.get("handover_completed"):
+                if res.get("clear_context", False):
+                    st.session_state["active_handover_emp"] = None
+                if res.get("notification"):
+                    st.session_state["notifications"].insert(0, res["notification"])
+            st.rerun()
+        
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("📋 Check Ganesh Jobs", use_container_width=True):
+            prompt = "Ganesh ka layoff ho gya hai, uske under kitni job assign hai?"
+            st.session_state["messages"].append({"role": "user", "content": prompt, "data": None})
+            res = analyze_question(prompt)
+            st.session_state["messages"].append({"role": "assistant", "content": res["answer"], "data": res})
+            if res.get("context_emp"):
+                st.session_state["active_handover_emp"] = res["context_emp"]
             st.rerun()
     with c2:
         if st.button("💰 2026 Collections", use_container_width=True):
@@ -748,12 +773,24 @@ def render_ai_chatbot():
                     with st.expander("📊 View Data Table (Optional)", expanded=False):
                         st.dataframe(msg["data"]["df"], use_container_width=True)
 
-    user_query = st.chat_input("Ask in English or Hindi (e.g. 'Assign job 1 to Jay Patel')...")
+    user_query = st.chat_input("Ask in English or Hindi (e.g. 'Rahul ka layoff ho gya hai...' or 'Job 1 Jay Patel ko assign ho')...")
     if user_query:
         st.session_state["messages"].append({"role": "user", "content": user_query, "data": None})
+        ctx_id = st.session_state["active_handover_emp"]["id"] if st.session_state.get("active_handover_emp") else None
         with st.spinner("Everest AI is processing..."):
-            ans = analyze_question(user_query)
+            ans = analyze_question(user_query, context_emp_id=ctx_id)
         st.session_state["messages"].append({"role": "assistant", "content": ans["answer"], "data": ans})
+        
+        # Track context employee if Step 1 triggered
+        if ans.get("context_emp"):
+            st.session_state["active_handover_emp"] = ans["context_emp"]
+            
+        # Handle handover completion, zero-count clearing, and inbox notification
+        if ans.get("handover_completed"):
+            if ans.get("clear_context", False):
+                st.session_state["active_handover_emp"] = None
+            if ans.get("notification"):
+                st.session_state["notifications"].insert(0, ans["notification"])
         st.rerun()
         
     st.markdown("</div>", unsafe_allow_html=True)

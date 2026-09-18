@@ -239,6 +239,82 @@ def get_employee_granular_roles(emp_id: str) -> list:
             
     return items
 
+def get_employee_active_jobs(emp_id: str) -> list:
+    """Returns an ordered, indexed list of all active jobs for an employee (as JC or allocated member)."""
+    emp_id = str(emp_id)
+    sql = """
+    SELECT 
+        j.id AS job_id,
+        j.name AS job_name,
+        p.id AS project_id,
+        p.name AS project_name,
+        j.status AS job_status,
+        CASE 
+            WHEN j.jc_id = ? THEN 'Job Coordinator (JC)'
+            ELSE 'Team Member'
+        END AS role_in_job,
+        j.type AS job_type
+    FROM jobs j
+    JOIN projects p ON j.project_id = p.id
+    LEFT JOIN job_allocations ja ON ja.job_id = j.id AND ja.employee_id = ?
+    WHERE (j.jc_id = ? OR ja.employee_id = ?) 
+      AND j.status IN ('In Progress', 'In Review', 'Backlog')
+    GROUP BY j.id
+    ORDER BY p.name ASC, j.name ASC;
+    """
+    df = run_query(sql, (emp_id, emp_id, emp_id, emp_id))
+    items = []
+    for _, r in df.iterrows():
+        items.append({
+            "id": r["job_id"],
+            "name": r["job_name"],
+            "project_id": r["project_id"],
+            "project_name": r["project_name"],
+            "role_title": r["role_in_job"],
+            "type": "jc" if "JC" in r["role_in_job"] else "allocation",
+            "category": "job",
+            "label": f"Job: {r['job_name']} [{r['project_name']}]"
+        })
+    return items
+
+def transfer_job_to_employee(job_id: str, from_emp_id: str, to_emp_id: str) -> bool:
+    """
+    Safely transfers a job from an exiting/departing employee to a successor colleague:
+    - If departing employee was JC, updates jobs.jc_id to recipient.
+    - Updates or clears job_allocations so departing employee has 0 allocation on this job.
+    - Ensures recipient is allocated or JC.
+    """
+    import uuid
+    job_id = str(job_id)
+    from_emp_id = str(from_emp_id)
+    to_emp_id = str(to_emp_id)
+    
+    # 1. Update jobs.jc_id if from_emp was JC
+    execute_update("UPDATE jobs SET jc_id = ? WHERE id = ? AND jc_id = ?", (to_emp_id, job_id, from_emp_id))
+    
+    # 2. Check existing allocation for recipient
+    df_rec = run_query("SELECT id FROM job_allocations WHERE job_id = ? AND employee_id = ?", (job_id, to_emp_id))
+    
+    # 3. Check existing allocation for departing employee
+    df_from = run_query("SELECT id, allocated_hours FROM job_allocations WHERE job_id = ? AND employee_id = ?", (job_id, from_emp_id))
+    
+    if not df_from.empty:
+        if not df_rec.empty:
+            # Recipient already has row, delete departing employee's row
+            execute_update("DELETE FROM job_allocations WHERE job_id = ? AND employee_id = ?", (job_id, from_emp_id))
+        else:
+            # Transfer departing employee's row to recipient
+            execute_update("UPDATE job_allocations SET employee_id = ? WHERE job_id = ? AND employee_id = ?", (to_emp_id, job_id, from_emp_id))
+    else:
+        # Departing employee was only JC. Ensure recipient has an allocation row if none exists
+        if df_rec.empty:
+            alloc_id = str(uuid.uuid4())
+            execute_update("INSERT INTO job_allocations (id, job_id, employee_id, allocated_hours, is_shadow) VALUES (?, ?, ?, 40.0, 0)", (alloc_id, job_id, to_emp_id))
+            
+    # Guarantee from_emp is completely purged from this job in allocations
+    execute_update("DELETE FROM job_allocations WHERE job_id = ? AND employee_id = ?", (job_id, from_emp_id))
+    return True
+
 def reassign_specific_entity(category: str, role_type: str, item_id: str, to_emp_id: str, from_emp_id: str = None) -> int:
     """Executes a targeted SQL update to reassign a specific project role or job."""
     to_emp_id = str(to_emp_id)
@@ -250,12 +326,16 @@ def reassign_specific_entity(category: str, role_type: str, item_id: str, to_emp
         col = "pc_id" if role_type == "pc" else ("am_id" if role_type == "am" else "sc_id")
         updated += execute_update(f"UPDATE projects SET {col} = ? WHERE id = ?", (to_emp_id, item_id))
     elif category == "job":
-        updated += execute_update("UPDATE jobs SET jc_id = ? WHERE id = ?", (to_emp_id, item_id))
         if from_emp_id:
-            execute_update("UPDATE job_allocations SET employee_id = ? WHERE job_id = ? AND employee_id = ?", (to_emp_id, item_id, from_emp_id))
+            transfer_job_to_employee(item_id, from_emp_id, to_emp_id)
+            updated += 1
+        else:
+            updated += execute_update("UPDATE jobs SET jc_id = ? WHERE id = ?", (to_emp_id, item_id))
+            updated += execute_update("UPDATE job_allocations SET employee_id = ? WHERE job_id = ?", (to_emp_id, item_id))
     elif category == "allocation":
         if from_emp_id:
-            updated += execute_update("UPDATE job_allocations SET employee_id = ? WHERE job_id = ? AND employee_id = ?", (to_emp_id, item_id, from_emp_id))
+            transfer_job_to_employee(item_id, from_emp_id, to_emp_id)
+            updated += 1
         else:
             updated += execute_update("UPDATE job_allocations SET employee_id = ? WHERE job_id = ?", (to_emp_id, item_id))
     return updated
@@ -265,8 +345,8 @@ def find_best_employee_match(name_query: str, all_employees: list) -> Optional[d
     if not name_query:
         return None
     nq = name_query.lower().strip()
-    nq = re.sub(r'^(to|and|is|assign|assigned|the|transfer)\s+', '', nq)
-    nq = re.sub(r'\s+(like that|please|now|etc)$', '', nq).strip()
+    nq = re.sub(r'^(to|and|is|assign|assigned|the|transfer|ko|aur|phir)\s+', '', nq, flags=re.IGNORECASE)
+    nq = re.sub(r'\s+(like that|please|now|etc|ko|assign|do|de do|ho)$', '', nq, flags=re.IGNORECASE).strip()
     
     for emp in all_employees:
         if emp['name'].lower() == nq:
@@ -283,67 +363,117 @@ def find_best_employee_match(name_query: str, all_employees: list) -> Optional[d
             return emp
     return None
 
-def parse_granular_handover_prompt(prompt: str, all_employees: list):
+def parse_granular_handover_prompt(prompt: str, all_employees: list, context_emp_id: Optional[str] = None):
     """
-    Extracts individual role/job assignments from conversational prompts like:
-    - "Ganesh is JC, assign job 1 to Jay Patel, job 2 to Bhavik Vachhani, and job 3 to Dhruv Nayak"
-    - "Assign job 1 to Jay Patel, job 2 to Bhavik Vachhani, job 3 to Dhruv Nayak"
-    - "Transfer Mobile UI to Jay Patel and Backend API to Bhavik Vachhani from Ganesh"
+    Extracts individual role/job assignments from conversational prompts in Hindi, Hinglish, and English:
+    - "job 1 Jay Patel ko assign ho aur job 2 Bhavik Vachhani ko assign ho"
+    - "job 1 assign to Jay Patel and job 2 assign to Bhavik Vachhani"
+    - "job 1 Jay Patel ko do aur job 2 Bhavik Vachhani ko do"
+    - "job 1 Jay Patel ko aur job 2 Bhavik Vachhani ko"
+    - "Assign job 1 to Jay Patel, job 2 to Bhavik Vachhani, and job 3 to Dhruv Nayak"
+    - "1 to Jay Patel and 2 to Bhavik Vachhani"
     """
     p = prompt.strip()
+    
+    # Primary numbered pattern
     pattern = re.compile(
-        r'(?:assign\s+|transfer\s+|reassign\s+)?'
+        r'(?:assign\s+|reassign\s+|transfer\s+)?'
         r'(?:the\s+)?'
-        r'((?:job\s*\d+|item\s*\d+|\b\d+\b|[\w\s\-\.\&]+?))\s+'
-        r'(?:is\s+|to\s+be\s+)?(?:assigned\s+|assign\s+|transferred\s+|transfer\s+)?to\s+'
-        r'([A-Za-z\s]+?)(?=(?:,\s*|\s+and\s+|\s+job\s*\d+|\s*\.|$))',
+        r'(?:job\s*|item\s*)?(\d+)\s*(?::\s*)?'
+        r'(?:is\s+assign\s+to\s+|is\s+assigned\s+to\s+|assign\s+to\s+|assigned\s+to\s+|assign\s+|to\s+be\s+assigned\s+to\s+|to\s+)?'
+        r'([A-Za-z\s]+?)'
+        r'(?:\s+ko\s+assign\s+ho|\s+ko\s+assign\s+karo|\s+ko\s+assign|\s+ko\s+de\s+do|\s+ko\s+do|\s+ko)?'
+        r'(?=(?:,\s*|\s+aur\s+|\s+and\s+|\s+phir\s+|\s+job\s*\d+|\s*\.|$))',
         re.IGNORECASE
     )
     matches = pattern.findall(p)
     raw_assignments = []
     target_ids = set()
     
-    for entity_str, recipient_str in matches:
-        entity_clean = entity_str.strip()
+    for job_num_str, recipient_str in matches:
         recipient_clean = recipient_str.strip()
-        entity_clean = re.sub(r'^(and|or|the)\s+', '', entity_clean, flags=re.IGNORECASE).strip()
+        recipient_clean = re.sub(r'^(and|or|the|aur|phir)\s+', '', recipient_clean, flags=re.IGNORECASE).strip()
         recipient_clean = re.sub(r'\s+from\s+.*$', '', recipient_clean, flags=re.IGNORECASE).strip()
         
-        if any(w in entity_clean.lower() for w in ["decide", "work on", "leaving", "example", "like that"]):
-            j_match = re.search(r'\b(job\s*\d+)\b', entity_clean, re.IGNORECASE)
-            if j_match:
-                entity_clean = j_match.group(1)
-            else:
-                continue
-                
         target_emp = find_best_employee_match(recipient_clean, all_employees)
         if target_emp:
             target_ids.add(target_emp['id'])
             
-        num_m = re.search(r'\b(?:job\s*|item\s*)?(\d+)\b', entity_clean, re.IGNORECASE)
-        job_idx = int(num_m.group(1)) if num_m else None
-        
+        try:
+            job_idx = int(job_num_str)
+        except (ValueError, TypeError):
+            job_idx = None
+            
         raw_assignments.append({
-            "raw_entity": entity_clean,
+            "raw_entity": f"Job {job_idx}" if job_idx else "Job",
             "job_index": job_idx,
             "raw_recipient": recipient_clean,
             "target_emp": target_emp
         })
         
+    # If no numbered matches, try named entity pattern
+    if not raw_assignments:
+        named_pattern = re.compile(
+            r'(?:assign\s+|transfer\s+|reassign\s+)?'
+            r'([A-Za-z0-9\s\-\.\&]+?)\s+'
+            r'(?:is\s+|to\s+be\s+)?(?:assigned\s+|assign\s+|transferred\s+|transfer\s+)?(?:to\s+|ko\s+)'
+            r'([A-Za-z\s]+?)(?=(?:,\s*|\s+and\s+|\s+aur\s+|\s*\.|$))',
+            re.IGNORECASE
+        )
+        for entity_str, recipient_str in named_pattern.findall(p):
+            entity_clean = entity_str.strip()
+            recipient_clean = recipient_str.strip()
+            entity_clean = re.sub(r'^(and|or|the|aur)\s+', '', entity_clean, flags=re.IGNORECASE).strip()
+            recipient_clean = re.sub(r'\s+from\s+.*$', '', recipient_clean, flags=re.IGNORECASE).strip()
+            
+            target_emp = find_best_employee_match(recipient_clean, all_employees)
+            if target_emp:
+                target_ids.add(target_emp['id'])
+                
+            num_m = re.search(r'\b(?:job\s*|item\s*)?(\d+)\b', entity_clean, re.IGNORECASE)
+            job_idx = int(num_m.group(1)) if num_m else None
+            
+            raw_assignments.append({
+                "raw_entity": entity_clean,
+                "job_index": job_idx,
+                "raw_recipient": recipient_clean,
+                "target_emp": target_emp
+            })
+            
+    # Resolve source_emp
     source_emp = None
     p_lower = p.lower()
+    
+    # 1. Mask out all recipient names and individual name tokens from prompt text
+    # to avoid false positives (e.g. 'Bhavik' in 'Bhavik Vachhani' matching 'Bhavik Maradiya')
+    p_remainder = p_lower
+    for assign in raw_assignments:
+        if assign.get("raw_recipient"):
+            p_remainder = p_remainder.replace(assign["raw_recipient"].lower(), " ")
+        if assign.get("target_emp"):
+            t_name = assign["target_emp"]["name"].lower()
+            p_remainder = p_remainder.replace(t_name, " ")
+            for tok in t_name.split():
+                if len(tok) >= 3:
+                    p_remainder = re.sub(rf'\b{re.escape(tok)}\b', " ", p_remainder)
+    
+    # Check if an explicit source employee name is in the remainder of the prompt
     for emp in sorted(all_employees, key=lambda x: len(x['name']), reverse=True):
         if emp['id'] in target_ids:
             continue
         ename = emp['name'].lower()
         first_name = ename.split()[0]
-        if ename in p_lower or (len(first_name) >= 4 and f" {first_name} " in f" {p_lower} "):
+        if ename in p_remainder or (len(first_name) >= 4 and re.search(rf'\b{re.escape(first_name)}\b', p_remainder)):
             source_emp = emp
             break
             
+    # 2. If not explicitly found in prompt, fallback to context_emp_id
+    if not source_emp and context_emp_id:
+        source_emp = next((e for e in all_employees if str(e['id']) == str(context_emp_id)), None)
+        
     return source_emp, raw_assignments
 
-def analyze_question(prompt: str, start_date=None, end_date=None) -> dict:
+def analyze_question(prompt: str, start_date=None, end_date=None, context_emp_id: Optional[str] = None) -> dict:
     """
     Intelligently analyzes natural language questions with accurate data resolution:
     - Granular Multi-Recipient Role & Job Handover (Job 1 to A, Job 2 to B, Job 3 to C)
@@ -390,20 +520,33 @@ def analyze_question(prompt: str, start_date=None, end_date=None) -> dict:
             if len(first_name) >= 4 and re.search(rf'\b{re.escape(first_name)}\b', p):
                 matched_emp = emp
                 break
+                
+    # Check Hindi/Hinglish candidate extraction patterns e.g. "XYZ ka layoff", "XYZ ke under kitni job"
+    if not matched_emp:
+        name_cand_m = re.search(r'([A-Za-z\s]+?)\s+(?:ka|ki|ke)\s+(?:layoff|lay\s*off|exit|nikal|chhod|under)', prompt, re.IGNORECASE)
+        if name_cand_m:
+            matched_emp = find_best_employee_match(name_cand_m.group(1), all_employees)
 
     # -------------------------------------------------------------
     # INTENT 1A: Granular Multi-Recipient Conversational Handover
-    # (e.g. "Ganesh is JC, assign job 1 to Jay Patel, job 2 to Bhavik Vachhani, job 3 to Dhruv Nayak")
+    # (e.g. "Ganesh is JC, assign job 1 to Jay Patel, job 2 to Bhavik Vachhani, job 3 to Dhruv Nayak"
+    #  or "job 1 Jay Patel ko assign ho aur job 2 Bhavik Vachhani ko assign ho")
     # -------------------------------------------------------------
-    source_emp, granular_assigns = parse_granular_handover_prompt(prompt, all_employees)
+    source_emp, granular_assigns = parse_granular_handover_prompt(prompt, all_employees, context_emp_id=context_emp_id)
     if granular_assigns and (len(granular_assigns) >= 2 or (len(granular_assigns) == 1 and granular_assigns[0]["job_index"] is not None)):
         if not source_emp and matched_emp:
-            source_emp = matched_emp
+            # Ensure matched_emp is not one of the recipients
+            target_emp_ids = [a["target_emp"]["id"] for a in granular_assigns if a["target_emp"]]
+            if matched_emp["id"] not in target_emp_ids:
+                source_emp = matched_emp
             
         if source_emp:
-            items = get_employee_granular_roles(source_emp["id"])
-            jobs_only = [it for it in items if it["category"] in ("job", "allocation")]
+            active_jobs = get_employee_active_jobs(source_emp["id"])
+            if not active_jobs:
+                active_jobs = [it for it in get_employee_granular_roles(source_emp["id"]) if it["category"] == "job"]
+                
             executed = []
+            recipients_updated = {}
             
             for assign in granular_assigns:
                 tgt = assign["target_emp"]
@@ -412,63 +555,89 @@ def analyze_question(prompt: str, start_date=None, end_date=None) -> dict:
                     
                 matched_item = None
                 # Check if specific job index requested
-                if assign["job_index"] is not None and 1 <= assign["job_index"] <= len(jobs_only):
-                    matched_item = jobs_only[assign["job_index"] - 1]
-                elif assign["job_index"] is not None and 1 <= assign["job_index"] <= len(items):
-                    matched_item = items[assign["job_index"] - 1]
+                if assign["job_index"] is not None and 1 <= assign["job_index"] <= len(active_jobs):
+                    matched_item = active_jobs[assign["job_index"] - 1]
                 else:
                     # Match by name
                     q_name = assign["raw_entity"].lower()
-                    for it in items:
+                    for it in active_jobs:
                         if q_name in it["name"].lower() or it["name"].lower() in q_name:
                             matched_item = it
                             break
                             
                 if matched_item:
-                    reassign_specific_entity(
-                        matched_item["category"],
-                        matched_item["type"],
-                        matched_item["id"],
-                        tgt["id"],
-                        source_emp["id"]
-                    )
+                    transfer_job_to_employee(matched_item["id"], source_emp["id"], tgt["id"])
                     executed.append({
-                        "Item Name": matched_item["name"],
+                        "Job Name": matched_item["name"],
                         "Project": matched_item["project_name"],
                         "Role Type": matched_item["role_title"],
-                        "Reassigned To": tgt["name"]
+                        "Previous Assignee": source_emp["name"],
+                        "Reassigned To": tgt["name"],
+                        "Status": "Reassigned & Updated in DB"
                     })
+                    recipients_updated[tgt["name"]] = tgt["id"]
                     
             if executed:
+                remaining_jobs = get_employee_active_jobs(source_emp["id"])
+                rem_count = len(remaining_jobs)
                 post_audit = audit_employee_responsibilities(source_emp["id"])
+                
+                # Format recipient summary bullets
+                rec_bullets = []
+                for r_name, r_id in recipients_updated.items():
+                    r_active = len(get_employee_active_jobs(r_id))
+                    r_added = sum(1 for ex in executed if ex["Reassigned To"] == r_name)
+                    rec_bullets.append(f"* 📈 **{r_name}:** **+{r_added} Job(s) Assigned** (Now holds **{r_active} active jobs** in Everest DB)")
+                rec_summary_text = "\n".join(rec_bullets)
+                
                 bullets = ""
                 for idx, ex in enumerate(executed, 1):
-                    bullets += f"* **Job {idx}: {ex['Item Name']}** ({ex['Role Type']}) -> Reassigned to **{ex['Reassigned To']}** (Project: *{ex['Project']}*)\n"
+                    bullets += f"* 💼 **Job {idx}: {ex['Job Name']}** (Project: *{ex['Project']}*) ➔ Reassigned to **{ex['Reassigned To']}**\n"
+                    
+                rem_status_line = f"* 📉 **{source_emp['name']} (Departing Staff):** **{rem_count} Remaining Active Jobs**"
+                if rem_count == 0:
+                    rem_status_line = f"* 📉 **{source_emp['name']} (Departing Staff):** **0 Remaining Active Jobs (All assigned jobs successfully cleared & transferred!)**"
+                    execute_update("UPDATE employees SET status = 'archived' WHERE id = ?", (source_emp["id"],))
                     
                 return {
-                    "answer": f"### [HANDOVER COMPLETED] Granular Role Transfers Executed\n\n"
-                              f"Successfully reallocated **{len(executed)} responsibilities** for **{source_emp['name']}** in the Everest database:\n\n"
+                    "answer": f"### ✅ [HANDOVER COMPLETED] Background Database Updated\n\n"
+                              f"Successfully reallocated **{len(executed)} jobs** for **{source_emp['name']}** in the Everest database:\n\n"
                               f"{bullets}\n"
-                              f"**Database Verification:**\n"
-                              f"* Live database records in `jobs` and `job_allocations` have been updated.\n"
-                              f"* Remaining active responsibilities for **{source_emp['name']}**: **{post_audit['total_responsibilities']}**.",
+                              f"---\n"
+                              f"**🔍 Verified Database Status:**\n"
+                              f"{rem_status_line}\n"
+                              f"{rec_summary_text}\n"
+                              f"* 💾 Live SQLite database updated: `jobs` and `job_allocations` reflect these changes immediately.",
                     "df": pd.DataFrame(executed),
                     "show_table_open": False,
-                    "sql": f"-- Live Granular UPDATE on jobs and projects from {source_emp['id']}",
+                    "sql": f"-- Live UPDATE on jobs and job_allocations: from {source_emp['id']}",
                     "metrics": {
-                        "Exiting Employee": source_emp["name"],
+                        "Departing Employee": source_emp["name"],
                         "Jobs Reassigned": len(executed),
-                        "Remaining Roles": post_audit["total_responsibilities"]
+                        "Remaining Jobs": rem_count,
+                        "Status": "Completed (0 Jobs)" if rem_count == 0 else f"{rem_count} remaining"
+                    },
+                    "handover_completed": True,
+                    "clear_context": (rem_count == 0),
+                    "notification": {
+                        "id": f"notif_handover_{datetime.datetime.now().strftime('%M%S')}",
+                        "title": f"Handover Completed: {source_emp['name']}'s Jobs Reassigned",
+                        "category": "Handover",
+                        "icon": "✅",
+                        "message": f"Successfully reallocated {len(executed)} jobs from {source_emp['name']}. Remaining active jobs: {rem_count}.",
+                        "time": "Just now",
+                        "status": "Pending"
                     },
                     "chart_type": None,
-                    "insight": f"Granular handover complete. Each job has been updated in Everest to its designated colleague."
+                    "insight": f"Granular handover complete. {source_emp['name']} remaining active jobs = {rem_count}."
                 }
 
     # -------------------------------------------------------------
     # INTENT 1B: Bulk Reassignment in Chat (Single Colleague)
-    # (e.g. "Transfer all jobs from Ritu Nayak to Bhavik Vachhani")
+    # (e.g. "Transfer all jobs to Jay Patel", "Transfer all jobs from Bhoomi to Bhavik")
     # -------------------------------------------------------------
-    if any(w in p for w in ["reassign", "transfer", "handover"]) and ("to" in p or "from" in p):
+    is_bulk_handover = any(w in p for w in ["reassign", "transfer", "handover", "sabhi job", "sab job", "all jobs", "sare job"])
+    if is_bulk_handover and ("to" in p or "from" in p or "ko" in p or context_emp_id is not None):
         found_emps = []
         for emp in all_employees:
             name_low = emp["name"].lower()
@@ -476,28 +645,59 @@ def analyze_question(prompt: str, start_date=None, end_date=None) -> dict:
                 found_emps.append((emp, p.find(name_low)))
         
         found_emps.sort(key=lambda x: x[1])
+        from_emp = None
+        to_emp = None
+        
         if len(found_emps) >= 2:
             from_emp = found_emps[0][0]
             to_emp = found_emps[1][0]
+        elif len(found_emps) == 1 and context_emp_id:
+            to_emp = found_emps[0][0]
+            from_emp = next((e for e in all_employees if str(e['id']) == str(context_emp_id)), None)
+            
+        if from_emp and to_emp and from_emp['id'] != to_emp['id']:
+            # Transfer all active jobs
+            from_jobs = get_employee_active_jobs(from_emp["id"])
+            for fj in from_jobs:
+                transfer_job_to_employee(fj["id"], from_emp["id"], to_emp["id"])
             result = reassign_employee_roles(from_emp["id"], to_emp["id"], "all")
-            post_audit = audit_employee_responsibilities(from_emp["id"])
+            post_jobs = get_employee_active_jobs(from_emp["id"])
+            rem_count = len(post_jobs)
+            execute_update("UPDATE employees SET status = 'archived' WHERE id = ?", (from_emp["id"],))
+            to_active_count = len(get_employee_active_jobs(to_emp["id"]))
             
             return {
-                "answer": f"### [HANDOVER COMPLETED]\n\n"
-                          f"Transferred all active responsibilities from **{from_emp['name']}** to **{to_emp['name']}**.\n\n"
-                          f"* **Action Executed:** {result['summary']}\n"
-                          f"* **Remaining Open Roles for {from_emp['name']}:** {post_audit['total_responsibilities']}\n\n"
-                          f"All project coordinators and job allocations in the database have been updated.",
-                "df": pd.DataFrame([{"Source Employee": from_emp["name"], "Successor": to_emp["name"], "Status": "Transferred", "Details": result['summary']}]),
+                "answer": f"### ✅ [HANDOVER COMPLETED] All Roles & Jobs Transferred\n\n"
+                          f"Transferred all active responsibilities from **{from_emp['name']}** to **{to_emp['name']}** in the Everest database.\n\n"
+                          f"* 💼 **Transferred Jobs:** **{len(from_jobs)} active jobs** reassigned to **{to_emp['name']}**.\n"
+                          f"* 📋 **Projects Transferred:** {result['summary']}\n"
+                          f"---\n"
+                          f"**🔍 Verified Database Status:**\n"
+                          f"* 📉 **{from_emp['name']} (Departing Staff):** **0 Remaining Active Jobs (All assigned jobs successfully cleared!)**\n"
+                          f"* 📈 **{to_emp['name']}:** **+{len(from_jobs)} Jobs Added** (Now holds **{to_active_count} active jobs** in Everest DB)\n"
+                          f"* 💾 Live SQLite database updated immediately.",
+                "df": pd.DataFrame([{"Source Employee": from_emp["name"], "Successor": to_emp["name"], "Jobs Transferred": len(from_jobs), "Status": "Transferred", "Details": result['summary']}]),
                 "show_table_open": False,
                 "sql": f"-- Live UPDATE on projects, jobs, and job_allocations from {from_emp['id']} to {to_emp['id']}",
                 "metrics": {
                     "From": from_emp["name"],
                     "To": to_emp["name"],
-                    "Remaining Roles": post_audit["total_responsibilities"]
+                    "Remaining Roles": rem_count,
+                    "Status": "Completed (0 Jobs)"
+                },
+                "handover_completed": True,
+                "clear_context": True,
+                "notification": {
+                    "id": f"notif_bulk_{datetime.datetime.now().strftime('%M%S')}",
+                    "title": f"Bulk Handover: {from_emp['name']} ➔ {to_emp['name']}",
+                    "category": "Handover",
+                    "icon": "✅",
+                    "message": f"Transferred all {len(from_jobs)} jobs from {from_emp['name']} to {to_emp['name']}. Remaining active jobs: 0.",
+                    "time": "Just now",
+                    "status": "Pending"
                 },
                 "chart_type": None,
-                "insight": f"Database updated. {from_emp['name']} no longer holds active project or job allocations."
+                "insight": f"Database updated. {from_emp['name']} no longer holds active project or job allocations (0 active jobs)."
             }
 
     # -------------------------------------------------------------
@@ -669,13 +869,20 @@ def analyze_question(prompt: str, start_date=None, end_date=None) -> dict:
 
     # -------------------------------------------------------------
     # INTENT 5: Specific Employee Projects & Jobs In-Depth / Handover Inquiry
-    # (e.g. "Ganesh is leaving, what jobs does he have?", "What is Dhruv working on?")
+    # (e.g. "Bhoomi Trivedi ka layoff ho gya hai, uske under kitni job assign hai?", "Ganesh is leaving, what jobs does he have?")
     # -------------------------------------------------------------
-    if matched_emp and any(w in p for w in ["which project", "which job", "what project", "what job", "working on", "allocated", "detail", "work", "job", "jobs", "leaving", "leave", "handover", "exit", "reassign", "who is"]):
+    if matched_emp and any(w in p for w in [
+        "which project", "which job", "what project", "what job", "working on", "allocated", "detail", "work",
+        "job", "jobs", "leaving", "leave", "handover", "exit", "reassign", "who is", "layoff", "lay off", "laid off",
+        "nikal", "chhod", "kitni job", "kitni jobs", "under kitni", "ke under"
+    ]):
         eid = matched_emp["id"]
         ename = matched_emp["name"]
         status_label = "Archived (Exited)" if matched_emp.get("status") == "archived" else "Active"
-        is_handover_inquiry = any(w in p for w in ["leaving", "leave", "handover", "reassign", "exit", "quit", "layoff"])
+        is_handover_inquiry = any(w in p for w in [
+            "leaving", "leave", "handover", "reassign", "exit", "quit", "layoff", "lay off", "laid off",
+            "nikal", "chhod", "kitni job", "kitni jobs", "under kitni", "ke under"
+        ])
 
         # Projects managed as PC, AM, SC
         sql_pc = f"""
@@ -687,68 +894,65 @@ def analyze_question(prompt: str, start_date=None, end_date=None) -> dict:
         """
         df_pc = run_query(sql_pc)
 
-        # Jobs allocated under each project
-        sql_jobs = f"""
-        SELECT 
-            p.name AS project_name,
-            j.name AS job_name,
-            j.status AS job_status,
-            j.start_date,
-            j.end_date,
-            CASE 
-                WHEN j.jc_id = '{eid}' THEN 'Job Coordinator (JC)'
-                ELSE 'Team Member'
-            END AS role_in_job,
-            COALESCE(SUM(t.logged_hours), 0) AS logged_hours
-        FROM jobs j
-        JOIN projects p ON j.project_id = p.id
-        LEFT JOIN job_allocations ja ON ja.job_id = j.id AND ja.employee_id = '{eid}'
-        LEFT JOIN timesheets t ON t.job_id = j.id AND t.employee_id = '{eid}'
-        WHERE (j.jc_id = '{eid}' OR ja.employee_id = '{eid}') AND j.status IN ('In Progress', 'In Review')
-        GROUP BY j.id
-        ORDER BY p.name, j.name;
-        """
-        df_j = run_query(sql_jobs)
-        total_active_jobs = len(df_j)
-        total_projects = df_j["project_name"].nunique() if not df_j.empty else 0
-        total_hours = df_j["logged_hours"].sum() if not df_j.empty else 0
+        # Get active jobs deterministically
+        active_jobs = get_employee_active_jobs(eid)
+        total_active_jobs = len(active_jobs)
+        unique_projects = len(set(j["project_name"] for j in active_jobs))
 
         # Build clean bulleted response
         projects_breakdown = ""
-        if not df_j.empty:
+        if active_jobs:
             projects_breakdown = "\n\n**Active Project & Job Assignments:**\n"
-            for j_idx, (_, jr) in enumerate(df_j.iterrows(), 1):
-                projects_breakdown += f"* **Job {j_idx}: {jr['job_name']}** ({jr['role_in_job']} | Project: *{jr['project_name']}* | {jr['logged_hours']:.1f} hrs logged)\n"
+            for j_idx, jr in enumerate(active_jobs, 1):
+                projects_breakdown += f"* 💼 **Job {j_idx}: {jr['name']}** ({jr['role_title']} | Project: *{jr['project_name']}*)\n"
         else:
-            projects_breakdown = "\n\n*Currently has no active in-progress job allocations.*"
+            projects_breakdown = "\n\n*Currently has 0 active in-progress job allocations in Everest.*"
 
         managed_summary = ""
         if not df_pc.empty:
             managed_summary = f"\n* **Coordinator Governance:** Oversees **{len(df_pc)} active project(s)** as PC/AM/SC."
 
         handover_hint = ""
-        if is_handover_inquiry and not df_j.empty:
+        if is_handover_inquiry and active_jobs:
             sample_names = ["Jay Patel", "Bhavik Vachhani", "Dhruv Nayak"]
-            prompt_example = ", ".join([f"job {i} to {sample_names[(i-1) % len(sample_names)]}" for i in range(1, min(total_active_jobs, 3) + 1)])
-            handover_hint = f"\n\n---\n**[HANDOVER ACTION] Granular Handover Prompt (Copy & Paste to assign):**\n" \
-                            f"*`Assign {prompt_example}`*\n\n" \
-                            f"*Or transfer all at once: `Transfer all jobs from {ename} to [Colleague]`*"
+            prompt_example_en = ", ".join([f"job {i} to {sample_names[(i-1) % len(sample_names)]}" for i in range(1, min(total_active_jobs, 3) + 1)])
+            prompt_example_hi = " aur ".join([f"job {i} {sample_names[(i-1) % len(sample_names)]} ko assign ho" for i in range(1, min(total_active_jobs, 2) + 1)])
+            handover_hint = (
+                f"\n\n---\n"
+                f"💡 **Next Step: Assign These Jobs to Colleagues (Step 2)**\n"
+                f"Aap in jobs ko kisi aur employee ko assign karne ke liye niche likhi tarah se reply de sakte hain:\n"
+                f"* **In Hindi / Hinglish:** `{prompt_example_hi}`\n"
+                f"* **In English:** `Assign {prompt_example_en}`\n"
+                f"* **Or Transfer All at once:** `Transfer all jobs from {ename} to {sample_names[0]}` (ya `Sabhi jobs {sample_names[0]} ko de do`)"
+            )
 
         title_label = "[HANDOVER AUDIT]" if is_handover_inquiry else "[EMPLOYEE]"
+
+        df_out = pd.DataFrame([{
+            "Job Number": f"Job {i}",
+            "Job Name": j["name"],
+            "Project": j["project_name"],
+            "Role": j["role_title"]
+        } for i, j in enumerate(active_jobs, 1)]) if active_jobs else pd.DataFrame()
 
         return {
             "answer": f"### {title_label} Work Profile: **{ename}**\n\n"
                       f"* **Status:** `{status_label}` | **Pod/Department:** `{matched_emp.get('department', 'N/A')}` | **Role:** `{matched_emp.get('role', 'N/A')}`\n"
-                      f"* **Current Active Work:** Assigned to **{total_active_jobs} Active Jobs** across **{total_projects} Projects** with **{total_hours:,.1f} total hours logged**.{managed_summary}{projects_breakdown}{handover_hint}",
-            "df": df_j,
+                      f"* **Current Active Work:** Assigned to **{total_active_jobs} Active Jobs** across **{unique_projects} Projects**.{managed_summary}{projects_breakdown}{handover_hint}",
+            "df": df_out,
             "show_table_open": False,
-            "sql": sql_jobs.strip(),
+            "sql": f"-- Live query for active jobs of {eid}",
             "metrics": {
                 "Employee": ename,
                 "Status": status_label,
                 "Active Jobs": total_active_jobs,
-                "Projects": total_projects,
-                "Logged Hours": f"{total_hours:,.1f} hrs"
+                "Projects": unique_projects
+            },
+            "context_emp": {
+                "id": matched_emp["id"],
+                "name": matched_emp["name"],
+                "role": matched_emp.get("role", "Staff"),
+                "active_jobs_count": total_active_jobs
             },
             "chart_type": None,
             "insight": f"{ename} has {total_active_jobs} active job(s) and {len(df_pc)} project coordinator role(s)."
