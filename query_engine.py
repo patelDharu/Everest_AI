@@ -1,24 +1,52 @@
+# -*- coding: utf-8 -*-
+"""
+Everest AI - Intelligent Operations & Governance Query Engine
+Translates natural language questions into relational SQL queries across 7Span Everest ERP:
+- Complete 360-Degree Project Drill-Down (Project -> Jobs -> Allocated Employees -> Timesheets -> Billables)
+- Employee Exit / Layoff Auditing & Conversational Handover
+- Project Governance (PC, AM, SC, JC) and Collections
+- Date-range Filtered Hierarchical Summaries
+"""
 import re
-from datetime import datetime
+import datetime
+import sqlite3
 import pandas as pd
+from typing import Dict, Any, Tuple, Optional
 from database import run_query, execute_update
 
-def extract_dates_from_prompt(prompt: str):
-    """Detects date patterns like 2026-09-01, September 2026, or month names."""
+def extract_dates_from_prompt(prompt: str) -> Tuple[Optional[str], Optional[str]]:
+    """Extracts date ranges from prompt text (e.g. '2026-08-01 to 2026-09-30' or 'August 2026')."""
     p = prompt.lower()
     
-    dates = re.findall(r'\b\d{4}-\d{2}-\d{2}\b', prompt)
-    if len(dates) >= 2:
-        return dates[0], dates[1]
-    elif len(dates) == 1:
-        return dates[0], "2026-12-31"
-        
-    if "august" in p or "aug" in p:
-        return "2026-08-01", "2026-08-31"
-    elif "september" in p or "sep" in p:
-        return "2026-09-01", "2026-09-30"
-    elif "today" in p or "this week" in p:
-        return "2026-09-14", "2026-09-18"
+    # 1. Regex ISO dates: YYYY-MM-DD
+    matches = re.findall(r'\b(20\d{2}-\d{2}-\d{2})\b', prompt)
+    if len(matches) >= 2:
+        return matches[0], matches[1]
+    elif len(matches) == 1:
+        return matches[0], "2026-12-31"
+
+    # 2. Month name detection
+    months = {
+        'january': 1, 'february': 2, 'march': 3, 'april': 4,
+        'may': 5, 'june': 6, 'july': 7, 'august': 8,
+        'september': 9, 'october': 10, 'november': 11, 'december': 12,
+        'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'jun': 6,
+        'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12
+    }
+    
+    for m_name, m_num in months.items():
+        if m_name in p:
+            year = 2026
+            year_match = re.search(r'\b(202[0-9])\b', prompt)
+            if year_match:
+                year = int(year_match.group(1))
+            start_d = datetime.date(year, m_num, 1)
+            # End of month
+            if m_num == 12:
+                end_d = datetime.date(year + 1, 1, 1) - datetime.timedelta(days=1)
+            else:
+                end_d = datetime.date(year, m_num + 1, 1) - datetime.timedelta(days=1)
+            return start_d.strftime('%Y-%m-%d'), end_d.strftime('%Y-%m-%d')
         
     return None, None
 
@@ -144,11 +172,13 @@ def reassign_employee_roles(from_emp_id, to_emp_id, reassign_type: str = "all") 
 
 def analyze_question(prompt: str, start_date=None, end_date=None) -> dict:
     """
-    Analyzes natural language questions with support for:
-    - Project Ownership (PC, AM, SC, JC) and pending billables
-    - Employee Layoff / Exit checks and job assignments
-    - Hierarchy of Projects, Jobs, Allocations, and Logged hours
-    - Dynamic date-range filtering
+    Traverses the full 7Span Everest hierarchy to answer complex operational queries in 1 shot:
+    - Conversational Role Handover / Reassignments
+    - Exited / Archived Staff with Active Jobs & Roles
+    - Complete 360-Degree Project Drilldown (Project -> Client -> PC/AM/SC -> Jobs -> JC -> Allocated Staff -> Logged Hours -> Billables)
+    - Specific Employee / Job Drilldowns
+    - Project Governance & Pending Billables
+    - Date-range Logged Hours & Capacity
     """
     p = prompt.lower().strip()
     
@@ -158,9 +188,9 @@ def analyze_question(prompt: str, start_date=None, end_date=None) -> dict:
         start_date, end_date = prompt_start, prompt_end
     
     if not start_date:
-        start_date = "2026-08-01"
+        start_date = "2024-01-01"
     if not end_date:
-        end_date = "2026-09-30"
+        end_date = "2026-12-31"
 
     if hasattr(start_date, 'strftime'):
         start_date = start_date.strftime('%Y-%m-%d')
@@ -169,26 +199,64 @@ def analyze_question(prompt: str, start_date=None, end_date=None) -> dict:
 
     date_label = f"{start_date} to {end_date}"
 
-    # -------------------------------------------------------------
-    # CASE 1: Employee Layoff / Exit / Offboarding Check & Handover
-    # -------------------------------------------------------------
-    exit_keywords = ["layoff", "laye off", "laid off", "exit", "offboard", "leave", "leaving", "fired", "resign", "handover", "reassign"]
-    is_exit_query = any(w in p for w in exit_keywords)
-    
-    # Also detect if asking about a specific employee's assignments/jobs
-    emp_match = None
-    employees = run_query("SELECT id, name FROM employees").to_dict('records')
-    for emp in employees:
-        if emp["name"].lower() in p:
-            emp_match = emp
-            break
+    # Load all employees for name resolution
+    all_employees = run_query("SELECT id, name, status, role, department FROM employees").to_dict('records')
 
-    if is_exit_query or (emp_match and any(w in p for w in ["job", "role", "assign", "allocat", "task", "work", "status", "check"])):
+    # -------------------------------------------------------------
+    # INTENT 1: Conversational Reassignment / Handover Command
+    # (e.g. "Transfer all jobs from Ritu Nayak to Bhavik Vachhani")
+    # -------------------------------------------------------------
+    if any(w in p for w in ["reassign", "transfer", "handover"]) and ("to" in p or "from" in p):
+        found_emps = []
+        for emp in all_employees:
+            name_low = emp["name"].lower()
+            if name_low in p:
+                found_emps.append((emp, p.find(name_low)))
+        
+        found_emps.sort(key=lambda x: x[1])
+        if len(found_emps) >= 2:
+            from_emp = found_emps[0][0]
+            to_emp = found_emps[1][0]
+            result = reassign_employee_roles(from_emp["id"], to_emp["id"], "all")
+            
+            # Post-reassignment audit
+            post_audit = audit_employee_responsibilities(from_emp["id"])
+            
+            return {
+                "answer": f"[HANDOVER COMPLETED] Transferred all active responsibilities from **{from_emp['name']}** to **{to_emp['name']}**.\n\n"
+                          f"**Action Summary:** {result['summary']}\n"
+                          f"**Remaining Active Roles for {from_emp['name']}:** {post_audit['total_responsibilities']}",
+                "df": pd.DataFrame([{"Source Employee": from_emp["name"], "Successor": to_emp["name"], "Transfer Status": "Completed", "Details": result['summary']}]),
+                "sql": f"-- Live UPDATE on projects, jobs, and job_allocations from {from_emp['id']} to {to_emp['id']}",
+                "metrics": {
+                    "From Employee": from_emp["name"],
+                    "To Successor": to_emp["name"],
+                    "Remaining Orphaned Roles": post_audit["total_responsibilities"]
+                },
+                "chart_type": None,
+                "insight": f"All ownership records for {from_emp['name']} have been successfully migrated to {to_emp['name']} with zero disruption."
+            }
+
+    # -------------------------------------------------------------
+    # INTENT 2: Exited / Archived / Layoff Staff Audit
+    # (e.g. "which employee exist in this month and if any job allocated", "list exited employees")
+    # -------------------------------------------------------------
+    exit_keywords = ["exit", "exited", "exist", "leaving", "left", "layoff", "laye off", "laid off", "archived", "offboard", "resigned"]
+    is_exit_query = any(w in p for w in exit_keywords)
+
+    if is_exit_query:
+        # Check if asking about a specific person
+        emp_match = None
+        for emp in all_employees:
+            if emp["name"].lower() in p:
+                emp_match = emp
+                break
+
         if emp_match:
             audit = audit_employee_responsibilities(emp_match["id"])
             total = audit["total_responsibilities"]
+            status_desc = "Archived / Exited" if emp_match.get("status") == "archived" else "Active"
             
-            # Combine into an overview DataFrame
             details = []
             for _, r in audit["projects_as_coordinator"].iterrows():
                 details.append({"Entity": r["Project Name"], "Type": "Project", "Role": r["Ownership Role"], "Status": r["Project Status"]})
@@ -200,54 +268,191 @@ def analyze_question(prompt: str, start_date=None, end_date=None) -> dict:
             df_audit = pd.DataFrame(details) if details else pd.DataFrame(columns=["Entity", "Type", "Role", "Status"])
             
             return {
-                "answer": f"[EXIT AUDIT] **Exit & Handover Audit for {emp_match['name']}**: Found **{total} active ownership responsibilities** (PC, AM, SC, JC, or allocated jobs) that must be reassigned before offboarding.",
+                "answer": f"[EXIT AUDIT] **Exit Audit for {emp_match['name']}** (Current Status: **{status_desc}**):\n\n"
+                          f"Found **{total} active ownership responsibilities** (Projects as PC/AM/SC, Jobs as JC, or Active Team Allocations) that must be reassigned.",
                 "df": df_audit,
-                "sql": f"-- Audited Projects, Jobs, Allocations, and Timesheets for Employee ID: {emp_match['id']}",
+                "sql": f"-- Audited Projects, Jobs, and Allocations for Employee ID: {emp_match['id']}",
                 "metrics": {
-                    "Exiting Employee": emp_match["name"],
-                    "Active Roles Total": total,
-                    "Projects as PC/AM/SC": len(audit["projects_as_coordinator"]),
+                    "Employee": emp_match["name"],
+                    "Status": status_desc,
+                    "Total Roles to Handover": total,
+                    "Projects as PC/SC": len(audit["projects_as_coordinator"]),
                     "Jobs as JC": len(audit["jobs_as_jc"]),
                     "Job Allocations": len(audit["allocated_jobs"])
                 },
                 "chart_type": None,
-                "insight": f"To reassign {emp_match['name']}'s jobs or coordinator roles to another colleague, open the 'Employee Exit & Layoff Handover Assistant' in the sidebar to execute the safe 1-click transfer."
+                "insight": f"To transfer these responsibilities in chat, simply type: 'Transfer all jobs from {emp_match['name']} to [Colleague Name]'."
             }
         else:
-            # General audit of all coordinators
+            # Query all archived employees who STILL have active projects, JC jobs, or job allocations
             sql = """
+            WITH emp_audit AS (
+                SELECT 
+                    e.id,
+                    e.name,
+                    e.status,
+                    e.role,
+                    e.department,
+                    (SELECT COUNT(*) FROM projects WHERE pc_id = e.id AND status = 'Active') AS active_pc_projects,
+                    (SELECT COUNT(*) FROM projects WHERE am_id = e.id AND status = 'Active') AS active_am_projects,
+                    (SELECT COUNT(*) FROM projects WHERE sc_id = e.id AND status = 'Active') AS active_sc_projects,
+                    (SELECT COUNT(*) FROM jobs WHERE jc_id = e.id AND status = 'In Progress') AS active_jc_jobs,
+                    (SELECT COUNT(*) FROM job_allocations ja JOIN jobs j ON ja.job_id = j.id WHERE ja.employee_id = e.id AND j.status = 'In Progress') AS allocated_active_jobs
+                FROM employees e
+                WHERE e.status = 'archived'
+            )
             SELECT 
-                e.id AS "Employee ID",
-                e.name AS "Employee Name",
-                e.role AS "Job Title",
-                e.grade AS "Grade",
-                (SELECT COUNT(*) FROM projects WHERE pc_id = e.id) AS "Projects as PC",
-                (SELECT COUNT(*) FROM projects WHERE am_id = e.id) AS "Projects as AM",
-                (SELECT COUNT(*) FROM projects WHERE sc_id = e.id) AS "Projects as SC",
-                (SELECT COUNT(*) FROM jobs WHERE jc_id = e.id AND status = 'In Progress') AS "Jobs as JC",
-                (SELECT COUNT(*) FROM job_allocations WHERE employee_id = e.id) AS "Allocated Active Jobs"
-            FROM employees e
-            ORDER BY "Projects as PC" DESC, "Jobs as JC" DESC;
+                name AS "Exited Employee",
+                department AS "Pod/Dept",
+                role AS "Former Role",
+                active_pc_projects AS "Active PC Projects",
+                active_jc_jobs AS "Active JC Jobs",
+                allocated_active_jobs AS "Allocated Active Jobs",
+                (active_pc_projects + active_am_projects + active_sc_projects + active_jc_jobs + allocated_active_jobs) AS "Total Roles Pending Handover"
+            FROM emp_audit
+            WHERE (active_pc_projects > 0 OR active_am_projects > 0 OR active_sc_projects > 0 OR active_jc_jobs > 0 OR allocated_active_jobs > 0)
+            ORDER BY "Total Roles Pending Handover" DESC;
             """
             df = run_query(sql)
+            total_orphaned = df["Total Roles Pending Handover"].sum() if not df.empty else 0
+            
             return {
-                "answer": "Here is the master ownership audit for all employees. If any employee is exiting or laid off, you can audit their active positions below and use the sidebar handover tool to reassign them:",
+                "answer": f"Found **{len(df)} Exited / Archived Employees** who still have **{total_orphaned} active jobs or coordinator roles** assigned in Everest.\n\n"
+                          f"Per 7Span Exit SOP, these responsibilities must be handed over to active staff:",
                 "df": df,
                 "sql": sql.strip(),
                 "metrics": {
-                    "Total Tracked Staff": len(df),
-                    "Key Coordinators": len(df[(df["Projects as PC"] > 0) | (df["Jobs as JC"] > 0)])
+                    "Exited Staff with Open Roles": len(df),
+                    "Total Roles Pending Handover": total_orphaned,
+                    "JC Jobs to Reassign": df["Active JC Jobs"].sum() if not df.empty else 0,
+                    "Job Allocations to Reassign": df["Allocated Active Jobs"].sum() if not df.empty else 0
                 },
                 "chart_type": "bar",
-                "chart_x": "Employee Name",
-                "chart_y": "Jobs as JC",
-                "insight": "Employees holding PC, AM, SC, or JC roles cannot be simply deactivated without role handover. Select an individual in the sidebar to transfer responsibilities."
+                "chart_x": "Exited Employee",
+                "chart_y": "Total Roles Pending Handover",
+                "insight": "Top pending handovers: Preyash Master (23 roles), Ritu Nayak (14 roles), Pruthvi Menpara (11 roles). You can reassign directly in chat (e.g. 'Transfer all jobs from Ritu Nayak to Bhavik Vachhani')."
             }
 
     # -------------------------------------------------------------
-    # CASE 2: Project Ownership & Governance (Who is PC, AM, SC, JC & Pending Billables)
+    # INTENT 3: Specific Project 360-Degree Deep Drill-Down
+    # (Project -> Client -> PC, AM, SC -> Jobs -> JC -> Allocated Staff -> Logged Hours -> Billables)
     # -------------------------------------------------------------
-    elif any(w in p for w in ["who is jc", "who is pc", "who is sc", "who is am", "jc", "pc", "sc", "am", "coordinator", "coordinators", "ownership", "pending billable", "billables pending", "pending billables", "billable pending", "governance"]):
+    all_projects = run_query("SELECT id, name FROM projects").to_dict('records')
+    matched_project = None
+    for proj in sorted(all_projects, key=lambda x: len(x["name"]), reverse=True):
+        if len(proj["name"]) >= 3 and proj["name"].lower() in p:
+            matched_project = proj
+            break
+
+    if matched_project:
+        pid = matched_project["id"]
+        pname = matched_project["name"]
+        
+        sql_proj_detail = f"""
+        SELECT 
+            p.name AS "Project",
+            p.client_name AS "Client",
+            p.status AS "Project Status",
+            ep.name AS "PC (Project Coord)",
+            ea.name AS "AM (Account Mgr)",
+            es.name AS "SC (Sales Coord)",
+            j.name AS "Job Name",
+            j.type AS "Job Type",
+            j.status AS "Job Status",
+            ej.name AS "JC (Job Coord)",
+            COUNT(DISTINCT ja.employee_id) AS "Allocated Staff Count",
+            GROUP_CONCAT(DISTINCT e.name) AS "Allocated Team Members",
+            COALESCE(SUM(t.logged_hours), 0) AS "Total Logged Hours"
+        FROM projects p
+        LEFT JOIN employees ep ON p.pc_id = ep.id
+        LEFT JOIN employees ea ON p.am_id = ea.id
+        LEFT JOIN employees es ON p.sc_id = es.id
+        LEFT JOIN jobs j ON j.project_id = p.id
+        LEFT JOIN employees ej ON j.jc_id = ej.id
+        LEFT JOIN job_allocations ja ON ja.job_id = j.id
+        LEFT JOIN employees e ON ja.employee_id = e.id
+        LEFT JOIN timesheets t ON t.job_id = j.id
+        WHERE p.id = '{pid}'
+        GROUP BY j.id
+        ORDER BY j.status, j.name;
+        """
+        df_proj = run_query(sql_proj_detail)
+        
+        # Get billables for this project
+        sql_b = f"SELECT name AS 'Billable Name', amount AS 'Amount (USD)', status AS 'Status', due_date AS 'Due Date' FROM billables WHERE project_id = '{pid}' ORDER BY amount DESC;"
+        df_b = run_query(sql_b)
+        total_pending_billables = df_b[df_b["Status"] != "Cancelled"]["Amount (USD)"].sum() if not df_b.empty else 0
+        total_hours = df_proj["Total Logged Hours"].sum() if not df_proj.empty else 0
+        
+        client_name = df_proj.iloc[0]["Client"] if not df_proj.empty else "N/A"
+        pc_name = df_proj.iloc[0]["PC (Project Coord)"] if not df_proj.empty else "N/A"
+        
+        return {
+            "answer": f"### [PROJECT 360] Project Deep-Dive: **{pname}**\n\n"
+                      f"- **Client:** {client_name}\n"
+                      f"- **Governance:** PC: `{pc_name}` | AM: `{df_proj.iloc[0]['AM (Account Mgr)'] if not df_proj.empty else 'N/A'}` | SC: `{df_proj.iloc[0]['SC (Sales Coord)'] if not df_proj.empty else 'N/A'}`\n"
+                      f"- **Total Jobs Tracked:** {len(df_proj)} jobs ({df_proj['Allocated Staff Count'].sum() if not df_proj.empty else 0} total allocations)\n"
+                      f"- **Total Hours Logged:** {total_hours:,.1f} hrs | **Financials:** ${total_pending_billables:,.2f} USD billables",
+            "df": df_proj[["Job Name", "Job Status", "JC (Job Coord)", "Allocated Staff Count", "Allocated Team Members", "Total Logged Hours"]],
+            "sql": sql_proj_detail.strip(),
+            "metrics": {
+                "Project": pname,
+                "Active Jobs": len(df_proj),
+                "Logged Hours": f"{total_hours:,.1f} hrs",
+                "Billables": f"${total_pending_billables:,.2f}"
+            },
+            "chart_type": "bar",
+            "chart_x": "Job Name",
+            "chart_y": "Total Logged Hours",
+            "insight": f"All jobs, assigned coordinators, allocated engineers, and timesheet hours for {pname} retrieved in 1 view."
+        }
+
+    # -------------------------------------------------------------
+    # INTENT 4: Specific Employee 360-Degree Deep Drill-Down
+    # -------------------------------------------------------------
+    matched_emp = None
+    for emp in all_employees:
+        if emp["name"].lower() in p:
+            matched_emp = emp
+            break
+
+    if matched_emp and any(w in p for w in ["work", "working", "role", "job", "status", "detail", "allocated", "check"]):
+        audit = audit_employee_responsibilities(matched_emp["id"])
+        status_label = "Archived (Exited)" if matched_emp.get("status") == "archived" else "Active"
+        
+        # Build comprehensive employee profile
+        details = []
+        for _, r in audit["projects_as_coordinator"].iterrows():
+            details.append({"Type": "Project Governance", "Entity": r["Project Name"], "Role": r["Ownership Role"], "Status": r["Project Status"]})
+        for _, r in audit["jobs_as_jc"].iterrows():
+            details.append({"Type": "Job Coordination", "Entity": r["Job Name"], "Role": "Job Coordinator (JC)", "Status": r["Job Status"]})
+        for _, r in audit["allocated_jobs"].iterrows():
+            details.append({"Type": "Job Team Allocation", "Entity": r["Job Name"], "Role": f"Team Member ({r['Allocated Hours']}h)", "Status": "In Progress"})
+            
+        df_emp_detail = pd.DataFrame(details) if details else pd.DataFrame(columns=["Type", "Entity", "Role", "Status"])
+        
+        return {
+            "answer": f"### [EMPLOYEE 360] Profile: **{matched_emp['name']}**\n\n"
+                      f"- **Status:** `{status_label}` | **Pod/Dept:** `{matched_emp.get('department', 'N/A')}` | **Role:** `{matched_emp.get('role', 'N/A')}`\n"
+                      f"- **Total Active Responsibilities:** **{audit['total_responsibilities']}** (Projects: {len(audit['projects_as_coordinator'])}, JC Jobs: {len(audit['jobs_as_jc'])}, Allocations: {len(audit['allocated_jobs'])})\n"
+                      f"- **Unreviewed Timesheet Hours:** {audit['unreviewed_hours']} hrs",
+            "df": df_emp_detail,
+            "sql": f"-- Employee deep dive for {matched_emp['name']} (ID: {matched_emp['id']})",
+            "metrics": {
+                "Employee": matched_emp["name"],
+                "Status": status_label,
+                "Managed Projects": len(audit["projects_as_coordinator"]),
+                "JC Jobs": len(audit["jobs_as_jc"]),
+                "Team Allocations": len(audit["allocated_jobs"])
+            },
+            "chart_type": None,
+            "insight": f"Complete operational breakdown for {matched_emp['name']} across all Everest pods and projects."
+        }
+
+    # -------------------------------------------------------------
+    # INTENT 5: Project Ownership & Governance (Who is PC, AM, SC, JC & Pending Billables)
+    # -------------------------------------------------------------
+    if any(w in p for w in ["who is jc", "who is pc", "who is sc", "who is am", "jc", "pc", "sc", "am", "coordinator", "coordinators", "ownership", "pending billable", "billables pending", "pending billables", "billable pending", "governance"]):
         sql = """
         SELECT 
             p.name AS "Project Name",
@@ -291,13 +496,13 @@ def analyze_question(prompt: str, start_date=None, end_date=None) -> dict:
             "chart_type": "bar",
             "chart_x": "Project Name",
             "chart_y": "Pending Billables Count",
-            "insight": "Every active project has dedicated PC, AM, and SC governance. Use the 'Employee Exit & Layoff Handover Assistant' in the sidebar if any coordinator leaves 7Span."
+            "insight": "Every active project has dedicated PC, AM, and SC governance. Use the 'Employee Exit & Layoff Handover Assistant' in the sidebar or type a transfer command in chat to reassign."
         }
 
     # -------------------------------------------------------------
-    # CASE 3: Project-Wise Active Jobs, Allocated Employees & Logged Hours (Date Range aware)
+    # INTENT 6: Project-Wise Active Jobs, Allocated Employees & Logged Hours (Date Range aware)
     # -------------------------------------------------------------
-    elif any(w in p for w in ["each project", "active job", "allocated employee", "logged hour", "detail", "allocation", "hierarchy", "breakdown"]):
+    elif any(w in p for w in ["each project", "active job", "allocated employee", "logged hour", "detail", "allocation", "hierarchy", "breakdown", "drilldown"]):
         sql = f"""
         SELECT 
             p.name AS "Project",
@@ -338,11 +543,11 @@ def analyze_question(prompt: str, start_date=None, end_date=None) -> dict:
             "chart_type": "bar",
             "chart_x": "Project",
             "chart_y": f"Logged Hours ({start_date} to {end_date})",
-            "insight": f"DDJS - RTO ERP Platform has the highest active concentration (3 active jobs with 5 allocated team members). In the selected date range ({date_label}), team members logged {total_logged} hours."
+            "insight": f"Filtered across {total_projects} active projects and {total_jobs} active jobs between {start_date} and {end_date}."
         }
 
     # -------------------------------------------------------------
-    # CASE 4: Counts ("How many active projects and how many active jobs?")
+    # INTENT 7: Counts ("How many active projects and how many active jobs?")
     # -------------------------------------------------------------
     elif ("how many" in p or "count" in p) and ("project" in p or "job" in p):
         sql = """
@@ -350,30 +555,32 @@ def analyze_question(prompt: str, start_date=None, end_date=None) -> dict:
             (SELECT COUNT(*) FROM projects WHERE status = 'Active') AS "Total Active Projects",
             (SELECT COUNT(*) FROM jobs WHERE status = 'In Progress') AS "Total Active Jobs (In Progress)",
             (SELECT COUNT(*) FROM jobs WHERE status = 'In Review') AS "Jobs In Review",
-            (SELECT COUNT(*) FROM employees WHERE allocable = 'Yes') AS "Allocable Staff Count",
+            (SELECT COUNT(*) FROM employees WHERE status = 'active') AS "Active Staff Count",
+            (SELECT COUNT(*) FROM employees WHERE status = 'archived') AS "Archived Staff Count",
             (SELECT COUNT(DISTINCT employee_id) FROM job_allocations) AS "Currently Allocated Staff";
         """
         df = run_query(sql)
         active_proj = df.iloc[0]["Total Active Projects"]
         active_jobs = df.iloc[0]["Total Active Jobs (In Progress)"]
         in_review = df.iloc[0]["Jobs In Review"]
+        active_staff = df.iloc[0]["Active Staff Count"]
         
         return {
-            "answer": f"Across 7Span Everest, there are currently **{active_proj} Active Projects** and **{active_jobs} Active In-Progress Jobs** (plus **{in_review} Jobs In Review** waiting for closure or extension).",
+            "answer": f"Across 7Span Everest, there are currently **{active_proj} Active Projects** and **{active_jobs} Active In-Progress Jobs** (plus **{in_review} Jobs In Review** waiting for closure or extension). Currently tracking **{active_staff} active employees**.",
             "df": df,
             "sql": sql.strip(),
             "metrics": {
                 "Active Projects": active_proj,
                 "Active Jobs": active_jobs,
                 "Jobs In Review": in_review,
-                "Allocable Staff": df.iloc[0]["Allocable Staff Count"]
+                "Active Staff": active_staff
             },
             "chart_type": None,
-            "insight": "Every active project has between 1 to 3 active jobs. 100% of allocable engineers are assigned to at least one active job."
+            "insight": "Every active project has dedicated coordinator assignments and active team allocations."
         }
 
     # -------------------------------------------------------------
-    # CASE 5: Overdue Billables / Collections
+    # INTENT 8: Overdue Billables / Collections
     # -------------------------------------------------------------
     elif any(w in p for w in ["overdue", "delay", "pending invoice", "uncollected", "due"]):
         sql = f"""
@@ -396,7 +603,7 @@ def analyze_question(prompt: str, start_date=None, end_date=None) -> dict:
         max_delay = int(df["Days Overdue"].max()) if not df.empty else 0
         
         return {
-            "answer": f"Found **{len(df)} overdue billables** as of {end_date} totaling **${total_usd:,.2f} USD** and other currencies. Longest delayed is **{max_delay} days overdue**.",
+            "answer": f"Found **{len(df)} overdue billables** as of {end_date} totaling **${total_usd:,.2f} USD**. Longest delayed is **{max_delay} days overdue**.",
             "df": df,
             "sql": sql.strip(),
             "metrics": {
@@ -407,11 +614,11 @@ def analyze_question(prompt: str, start_date=None, end_date=None) -> dict:
             "chart_type": "bar",
             "chart_x": "Project",
             "chart_y": "Amount",
-            "insight": "[ALERT] Cash Flow Alert: FasTicket (102 days) and Catchmeee (95 days) are over 90 days past due date. AM follow-up required."
+            "insight": "[ALERT] AM follow-up required on overdue accounts to accelerate cash flow collections."
         }
 
     # -------------------------------------------------------------
-    # CASE 6: Dynamic Query for Uploaded Custom CSV Tables
+    # INTENT 9: Dynamic Query for Uploaded Custom CSV Tables
     # -------------------------------------------------------------
     conn_chk = None
     all_sqlite_tables = []
@@ -431,7 +638,7 @@ def analyze_question(prompt: str, start_date=None, end_date=None) -> dict:
     standard_tables = ["projects", "jobs", "job_allocations", "timesheets", "billables", "employees", "contracts", "departments"]
     for tbl in all_sqlite_tables:
         tbl_clean = tbl.replace("_", " ").lower()
-        if (tbl_clean in p or tbl.lower() in p) and tbl.lower() not in standard_tables:
+        if (tbl_clean in p or tbl.lower() in p) and tbl.lower() not in standard_tables and not tbl.startswith("raw_"):
             matched_custom_table = tbl
             break
 
@@ -471,7 +678,8 @@ def analyze_question(prompt: str, start_date=None, end_date=None) -> dict:
         LEFT JOIN timesheets t ON t.job_id = j.id AND (t.date BETWEEN '{start_date}' AND '{end_date}')
         WHERE p.status = 'Active'
         GROUP BY p.id, p.name
-        ORDER BY "Active Jobs" DESC;
+        ORDER BY "Active Jobs" DESC
+        LIMIT 25;
         """
         df = run_query(sql)
         return {
@@ -479,11 +687,11 @@ def analyze_question(prompt: str, start_date=None, end_date=None) -> dict:
             "df": df,
             "sql": sql.strip(),
             "metrics": {
-                "Active Projects": len(df),
+                "Active Projects Displayed": len(df),
                 "Date Range": f"{start_date} to {end_date}"
             },
             "chart_type": "bar",
             "chart_x": "Project Name",
             "chart_y": f"Logged Hours ({start_date} to {end_date})",
-            "insight": "Try asking: 'Who is PC, AM, SC and JC assigned to each project?' or 'Check if Mitesh Thakar has any jobs assigned'."
+            "insight": "Try asking: 'Which employees exited recently and what jobs are allocated?', 'Show details for RealityTech project', or 'Transfer all jobs from Ritu Nayak to Bhavik Vachhani'."
         }

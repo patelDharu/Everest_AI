@@ -96,10 +96,11 @@ with st.sidebar:
     
     st.subheader("💡 Quick Prompts")
     quick_prompts = [
+        "Which employees exited and what active jobs are allocated to them?",
+        "Show 360° drilldown for RealityTech project",
         "Who is PC, AM, SC and JC assigned to each project?",
+        "What is Dhruv Nayak working on?",
         "Project-wise active jobs, allocated employees and logged hours",
-        "Check if Mitesh Thakar has any jobs assigned",
-        "How many active projects and active jobs?",
         "Show overdue billables and days delayed"
     ]
     
@@ -120,7 +121,7 @@ if "messages" not in st.session_state:
     st.session_state["messages"] = [
         {
             "role": "assistant",
-            "content": "👋 **Welcome to Everest AI!**\n\nYou can ask about:\n* **Project Governance:** Who is assigned as PC, AM, SC, and JC for each project, and whether billables are pending.\n* **Employee Exit & Handover:** Check what active jobs, allocations, or coordinator roles an exiting employee has.\n* **Deep Project Breakdown:** View active jobs, allocated employees, and logged hours across custom date ranges.",
+            "content": "👋 **Welcome to Everest AI Assistant!**\n\nNo need to click 5 screens across Projects, Jobs, Allocations, and Timesheets. Simply ask in chat:\n\n* **🚪 Exited / Layoff Staff Audits:** *'Which employees exited and what jobs are allocated?'* or *'Check if [Name] exited and their jobs'*.\n* **⚡ Conversational Handover:** *'Transfer all jobs from Ritu Nayak to Bhavik Vachhani'*.\n* **🔍 360° Project Deep-Dive:** *'Show details for RealityTech project'* (returns Client, PC/AM/SC, all Jobs, JCs, Allocated Engineers, Logged Hours & Billables in 1 view).\n* **🧑‍💻 Employee Profile:** *'What is Dhruv Nayak working on?'*\n* **📊 Project Governance:** *'Who is PC, AM, SC and JC assigned to each project?'*",
             "data": None
         }
     ]
