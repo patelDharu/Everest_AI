@@ -14,6 +14,7 @@ import datetime
 import sqlite3
 import pandas as pd
 from typing import Dict, Any, Tuple, Optional
+import difflib
 from database import run_query, execute_update
 
 # Latest reference date in 7Span production database
@@ -340,78 +341,204 @@ def reassign_specific_entity(category: str, role_type: str, item_id: str, to_emp
             updated += execute_update("UPDATE job_allocations SET employee_id = ? WHERE job_id = ?", (to_emp_id, item_id))
     return updated
 
+def normalize_phonetic(s: str) -> str:
+    """Normalizes common Indian phonetic spelling variations (e.g. u/oo, ee/i, sh/s, v/w)."""
+    s = s.lower().strip()
+    return (s.replace("oo", "u")
+             .replace("ee", "i")
+             .replace("sh", "s")
+             .replace("th", "t")
+             .replace("ck", "k")
+             .replace("v", "w"))
+
 def find_best_employee_match(name_query: str, all_employees: list) -> Optional[dict]:
-    """Finds an employee by full name, first name, or partial string match."""
+    """
+    Finds an employee by full name, first name, phonetic similarity, or multi-token fuzzy matching.
+    Resolves spelling variations (e.g. 'bhumi trivedi' -> 'Bhoomi Trivedi', 'bhavik' -> 'Bhavik Vachhani').
+    """
     if not name_query:
         return None
     nq = name_query.lower().strip()
-    nq = re.sub(r'^(to|and|is|assign|assigned|the|transfer|ko|aur|phir)\s+', '', nq, flags=re.IGNORECASE)
-    nq = re.sub(r'\s+(like that|please|now|etc|ko|assign|do|de do|ho)$', '', nq, flags=re.IGNORECASE).strip()
-    
+    nq = re.sub(r'^(to\s+the|to|and|is|assign|assigned|the|transfer|ko|aur|phir|for|now|i\s+want\s+to)\s+', '', nq, flags=re.IGNORECASE).strip()
+    nq = re.sub(r'\s+(like that|please|now|etc|ko|assign|do|de do|ho|ka|ki|ke|under|jobs?|profile)$', '', nq, flags=re.IGNORECASE).strip()
+    if not nq or len(nq) < 3:
+        return None
+
+    # 1. Exact string match
     for emp in all_employees:
         if emp['name'].lower() == nq:
             return emp
+
+    # 2. Phonetic exact match (e.g. 'bhumi trivedi' == 'bhoomi trivedi')
+    nq_norm = normalize_phonetic(nq)
     for emp in all_employees:
-        tokens = [t.lower() for t in emp['name'].split()]
-        if nq in tokens:
+        if normalize_phonetic(emp['name']) == nq_norm:
             return emp
+
+    # 3. Multi-token scoring
+    q_tokens = [normalize_phonetic(t) for t in nq.split() if len(t) > 1]
+    best_emp = None
+    best_score = 0.0
+
     for emp in all_employees:
-        if emp['name'].lower().startswith(nq):
-            return emp
+        ename = emp['name'].lower()
+        ename_norm = normalize_phonetic(ename)
+        e_tokens = [normalize_phonetic(t) for t in ename.split()]
+
+        score = 0.0
+        if ename == nq:
+            score = 100.0
+        elif ename_norm == nq_norm:
+            score = 95.0
+        else:
+            matched_tokens = 0.0
+            for qt in q_tokens:
+                for et in e_tokens:
+                    if qt == et:
+                        matched_tokens += 1.0
+                        break
+                    elif difflib.SequenceMatcher(None, qt, et).ratio() >= 0.8:
+                        matched_tokens += 0.85
+                        break
+
+            if len(q_tokens) >= 2:
+                if matched_tokens >= 1.7:
+                    score = 80.0 + matched_tokens * 10.0
+                elif matched_tokens >= 0.9:
+                    score = 40.0 + matched_tokens * 5.0
+            elif len(q_tokens) == 1:
+                if matched_tokens >= 0.95:
+                    score = 50.0 + matched_tokens * 10.0
+
+            ratio = difflib.SequenceMatcher(None, nq_norm, ename_norm).ratio()
+            if ratio >= 0.8:
+                score = max(score, ratio * 75.0)
+
+        if score > best_score:
+            best_score = score
+            best_emp = emp
+
+    if best_score >= 50.0:
+        return best_emp
+    return None
+
+def find_employee_in_text(text: str, all_employees: list) -> Optional[dict]:
+    """Extracts the best matching employee mentioned in conversational text."""
+    t_clean = text.strip()
+    direct = find_best_employee_match(t_clean, all_employees)
+    if direct:
+        return direct
+        
+    t_norm = normalize_phonetic(t_clean)
     for emp in all_employees:
-        if nq in emp['name'].lower() and len(nq) >= 3:
+        ename_norm = normalize_phonetic(emp['name'])
+        if len(ename_norm) >= 5 and ename_norm in t_norm:
             return emp
+            
+    # Check 2-word sliding window (e.g. 'bhumi trivedi', 'jay patel')
+    words = t_clean.split()
+    for i in range(len(words) - 1):
+        bigram = f"{words[i]} {words[i+1]}"
+        match = find_best_employee_match(bigram, all_employees)
+        if match:
+            return match
+            
+    # Check single word tokens with stop words guard
+    stop_words = {
+        "what", "which", "how", "many", "jobs", "job", "work", "under", "with", "from",
+        "assign", "assigned", "last", "week", "month", "year", "show", "give", "want",
+        "more", "date", "start", "end", "billable", "billables", "revenue", "collected",
+        "timeline", "projects", "project", "company", "leave", "exit", "left", "total"
+    }
+    for w in words:
+        w_low = w.lower()
+        if len(w_low) >= 4 and w_low not in stop_words:
+            w_norm = normalize_phonetic(w_low)
+            for emp in all_employees:
+                fn_norm = normalize_phonetic(emp['name'].split()[0])
+                if w_norm == fn_norm:
+                    return emp
     return None
 
 def parse_granular_handover_prompt(prompt: str, all_employees: list, context_emp_id: Optional[str] = None):
     """
-    Extracts individual role/job assignments from conversational prompts in Hindi, Hinglish, and English:
+    Extracts individual or grouped role/job assignments from conversational prompts:
+    - "now i want to job 1 2 and 3 is assign to the bhumi trivedi"
+    - "job 1 2 aur 3 bhumi trivedi ko assign ho"
     - "job 1 Jay Patel ko assign ho aur job 2 Bhavik Vachhani ko assign ho"
-    - "job 1 assign to Jay Patel and job 2 assign to Bhavik Vachhani"
-    - "job 1 Jay Patel ko do aur job 2 Bhavik Vachhani ko do"
-    - "job 1 Jay Patel ko aur job 2 Bhavik Vachhani ko"
     - "Assign job 1 to Jay Patel, job 2 to Bhavik Vachhani, and job 3 to Dhruv Nayak"
-    - "1 to Jay Patel and 2 to Bhavik Vachhani"
     """
     p = prompt.strip()
-    
-    # Primary numbered pattern
-    pattern = re.compile(
-        r'(?:assign\s+|reassign\s+|transfer\s+)?'
-        r'(?:the\s+)?'
-        r'(?:job\s*|item\s*)?(\d+)\s*(?::\s*)?'
-        r'(?:is\s+assign\s+to\s+|is\s+assigned\s+to\s+|assign\s+to\s+|assigned\s+to\s+|assign\s+|to\s+be\s+assigned\s+to\s+|to\s+)?'
-        r'([A-Za-z\s]+?)'
-        r'(?:\s+ko\s+assign\s+ho|\s+ko\s+assign\s+karo|\s+ko\s+assign|\s+ko\s+de\s+do|\s+ko\s+do|\s+ko)?'
-        r'(?=(?:,\s*|\s+aur\s+|\s+and\s+|\s+phir\s+|\s+job\s*\d+|\s*\.|$))',
-        re.IGNORECASE
-    )
-    matches = pattern.findall(p)
     raw_assignments = []
     target_ids = set()
     
-    for job_num_str, recipient_str in matches:
-        recipient_clean = recipient_str.strip()
-        recipient_clean = re.sub(r'^(and|or|the|aur|phir)\s+', '', recipient_clean, flags=re.IGNORECASE).strip()
-        recipient_clean = re.sub(r'\s+from\s+.*$', '', recipient_clean, flags=re.IGNORECASE).strip()
-        
-        target_emp = find_best_employee_match(recipient_clean, all_employees)
-        if target_emp:
+    # 1. Multi-job group pattern: "job 1 2 and 3 is assign to the bhumi trivedi", "jobs 1, 2, 3 to Bhoomi Trivedi"
+    multi_m = re.search(
+        r'(?:job|jobs|item|items)\s*([0-9\s,and/aur]+?)\s*'
+        r'(?:is\s+|are\s+|to\s+be\s+)?(?:assigned\s+to|assign\s+to|assign|transferred\s+to|transfer\s+to|transfer|to|\bko\b)\s*'
+        r'([A-Za-z\s]+?)(?:\s+ko\s+assign\s+ho|\s+ko\s+assign|\s+ko\s+do|\s+ko)?$',
+        p,
+        re.IGNORECASE
+    )
+    if not multi_m:
+        # Hindi variant: e.g. "job 1 2 aur 3 bhumi trivedi ko assign ho"
+        multi_m = re.search(
+            r'(?:job|jobs|item|items)\s*([0-9\s,and/aur]+?)\s+'
+            r'([A-Za-z\s]+?)\s+ko\s+(?:assign|de\s+do|do|transferred|transfer)',
+            p,
+            re.IGNORECASE
+        )
+
+    if multi_m:
+        num_str = multi_m.group(1)
+        rec_str = multi_m.group(2)
+        nums = [int(n) for n in re.findall(r'\b\d+\b', num_str)]
+        target_emp = find_best_employee_match(rec_str, all_employees)
+        if nums and target_emp:
             target_ids.add(target_emp['id'])
+            for n in nums:
+                raw_assignments.append({
+                    "raw_entity": f"Job {n}",
+                    "job_index": n,
+                    "raw_recipient": rec_str,
+                    "target_emp": target_emp
+                })
+
+    # 2. Multi-recipient pairs: "job 1 to Jay Patel and job 2 to Bhavik Vachhani"
+    if not raw_assignments:
+        pattern = re.compile(
+            r'(?:assign\s+|reassign\s+|transfer\s+)?'
+            r'(?:the\s+)?'
+            r'(?:job\s*|item\s*)?(\d+)\s*(?::\s*)?'
+            r'(?:is\s+assign\s+to\s+|is\s+assigned\s+to\s+|assign\s+to\s+|assigned\s+to\s+|assign\s+|to\s+be\s+assigned\s+to\s+|to\s+)?'
+            r'([A-Za-z\s]+?)'
+            r'(?:\s+ko\s+assign\s+ho|\s+ko\s+assign\s+karo|\s+ko\s+assign|\s+ko\s+de\s+do|\s+ko\s+do|\s+ko)?'
+            r'(?=(?:,\s*|\s+aur\s+|\s+and\s+|\s+phir\s+|\s+job\s*\d+|\s*\.|$))',
+            re.IGNORECASE
+        )
+        matches = pattern.findall(p)
+        for job_num_str, recipient_str in matches:
+            recipient_clean = recipient_str.strip()
+            recipient_clean = re.sub(r'^(and|or|the|aur|phir)\s+', '', recipient_clean, flags=re.IGNORECASE).strip()
+            recipient_clean = re.sub(r'\s+from\s+.*$', '', recipient_clean, flags=re.IGNORECASE).strip()
             
-        try:
-            job_idx = int(job_num_str)
-        except (ValueError, TypeError):
-            job_idx = None
+            target_emp = find_best_employee_match(recipient_clean, all_employees)
+            if target_emp:
+                target_ids.add(target_emp['id'])
+                
+            try:
+                job_idx = int(job_num_str)
+            except (ValueError, TypeError):
+                job_idx = None
+                
+            raw_assignments.append({
+                "raw_entity": f"Job {job_idx}" if job_idx else "Job",
+                "job_index": job_idx,
+                "raw_recipient": recipient_clean,
+                "target_emp": target_emp
+            })
             
-        raw_assignments.append({
-            "raw_entity": f"Job {job_idx}" if job_idx else "Job",
-            "job_index": job_idx,
-            "raw_recipient": recipient_clean,
-            "target_emp": target_emp
-        })
-        
-    # If no numbered matches, try named entity pattern
+    # 3. Named entity pattern fallback
     if not raw_assignments:
         named_pattern = re.compile(
             r'(?:assign\s+|transfer\s+|reassign\s+)?'
@@ -443,9 +570,6 @@ def parse_granular_handover_prompt(prompt: str, all_employees: list, context_emp
     # Resolve source_emp
     source_emp = None
     p_lower = p.lower()
-    
-    # 1. Mask out all recipient names and individual name tokens from prompt text
-    # to avoid false positives (e.g. 'Bhavik' in 'Bhavik Vachhani' matching 'Bhavik Maradiya')
     p_remainder = p_lower
     for assign in raw_assignments:
         if assign.get("raw_recipient"):
@@ -456,19 +580,12 @@ def parse_granular_handover_prompt(prompt: str, all_employees: list, context_emp
             for tok in t_name.split():
                 if len(tok) >= 3:
                     p_remainder = re.sub(rf'\b{re.escape(tok)}\b', " ", p_remainder)
-    
-    # Check if an explicit source employee name is in the remainder of the prompt
-    for emp in sorted(all_employees, key=lambda x: len(x['name']), reverse=True):
-        if emp['id'] in target_ids:
-            continue
-        ename = emp['name'].lower()
-        first_name = ename.split()[0]
-        if ename in p_remainder or (len(first_name) >= 4 and re.search(rf'\b{re.escape(first_name)}\b', p_remainder)):
-            source_emp = emp
-            break
-            
-    # 2. If not explicitly found in prompt, fallback to context_emp_id
-    if not source_emp and context_emp_id:
+                    
+    # Check if another employee is mentioned in remainder of prompt
+    candidate_source = find_employee_in_text(p_remainder, all_employees)
+    if candidate_source and candidate_source['id'] not in target_ids:
+        source_emp = candidate_source
+    elif context_emp_id:
         source_emp = next((e for e in all_employees if str(e['id']) == str(context_emp_id)), None)
         
     return source_emp, raw_assignments
@@ -506,26 +623,8 @@ def analyze_question(prompt: str, start_date=None, end_date=None, context_emp_id
             matched_project = proj
             break
 
-    # Detect if an employee is mentioned (full name or first name/token)
-    matched_emp = None
-    for emp in sorted(all_employees, key=lambda x: len(x["name"]), reverse=True):
-        if len(emp["name"]) >= 4 and emp["name"].lower() in p:
-            matched_emp = emp
-            break
-            
-    if not matched_emp:
-        # Check first name or distinct tokens with word boundary
-        for emp in all_employees:
-            first_name = emp["name"].split()[0].lower()
-            if len(first_name) >= 4 and re.search(rf'\b{re.escape(first_name)}\b', p):
-                matched_emp = emp
-                break
-                
-    # Check Hindi/Hinglish candidate extraction patterns e.g. "XYZ ka layoff", "XYZ ke under kitni job"
-    if not matched_emp:
-        name_cand_m = re.search(r'([A-Za-z\s]+?)\s+(?:ka|ki|ke)\s+(?:layoff|lay\s*off|exit|nikal|chhod|under)', prompt, re.IGNORECASE)
-        if name_cand_m:
-            matched_emp = find_best_employee_match(name_cand_m.group(1), all_employees)
+    # Detect if an employee is mentioned (smart phonetic & multi-token match)
+    matched_emp = find_employee_in_text(prompt, all_employees)
 
     # -------------------------------------------------------------
     # INTENT 1A: Granular Multi-Recipient Conversational Handover
@@ -871,11 +970,7 @@ def analyze_question(prompt: str, start_date=None, end_date=None, context_emp_id
     # INTENT 5: Specific Employee Projects & Jobs In-Depth / Handover Inquiry
     # (e.g. "Bhoomi Trivedi ka layoff ho gya hai, uske under kitni job assign hai?", "Ganesh is leaving, what jobs does he have?")
     # -------------------------------------------------------------
-    if matched_emp and any(w in p for w in [
-        "which project", "which job", "what project", "what job", "working on", "allocated", "detail", "work",
-        "job", "jobs", "leaving", "leave", "handover", "exit", "reassign", "who is", "layoff", "lay off", "laid off",
-        "nikal", "chhod", "kitni job", "kitni jobs", "under kitni", "ke under"
-    ]):
+    if matched_emp:
         eid = matched_emp["id"]
         ename = matched_emp["name"]
         status_label = "Archived (Exited)" if matched_emp.get("status") == "archived" else "Active"
