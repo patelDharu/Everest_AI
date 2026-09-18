@@ -949,3 +949,212 @@ def analyze_question(prompt: str, start_date=None, end_date=None) -> dict:
             "chart_y": "Logged Hours",
             "insight": "Ask specific revenue, project, extension, or employee questions to receive targeted bulleted briefings."
         }
+
+# -------------------------------------------------------------
+# EVEREST ERP NATIVE VIEW BUILDERS
+# -------------------------------------------------------------
+def get_everest_projects_view(search: str = "", status: str = "All", limit: int = 50) -> pd.DataFrame:
+    """Fetches formatted projects matching Everest screenshot #media_1789708497100.png"""
+    where_clauses = []
+    params = []
+    
+    if status != "All":
+        where_clauses.append("p.status = ?")
+        params.append(status)
+    if search:
+        where_clauses.append("(p.name LIKE ? OR p.client_name LIKE ? OR ep.name LIKE ?)")
+        s = f"%{search}%"
+        params.extend([s, s, s])
+        
+    where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+    sql = f"""
+    SELECT 
+        p.id,
+        p.name AS "Project Name",
+        p.client_name AS "Client",
+        COALESCE(ep.name, '-') AS "PC",
+        COALESCE(ea.name, '-') AS "AM",
+        COALESCE(es.name, '-') AS "SC",
+        p.status AS "Status",
+        (SELECT COUNT(*) FROM jobs WHERE project_id = p.id AND status = 'In Progress') AS "Pending Jobs",
+        (SELECT COUNT(*) FROM billables WHERE project_id = p.id AND status != 'collected' AND status != 'cancelled') AS "Pending Billables"
+    FROM projects p
+    LEFT JOIN employees ep ON p.pc_id = ep.id
+    LEFT JOIN employees ea ON p.am_id = ea.id
+    LEFT JOIN employees es ON p.sc_id = es.id
+    {where_sql}
+    ORDER BY 
+        CASE WHEN p.name = 'Property Vibees' THEN 0 ELSE 1 END,
+        "Pending Jobs" DESC, p.name ASC
+    LIMIT {limit};
+    """
+    return run_query(sql, tuple(params) if params else None)
+
+def get_everest_jobs_view(search: str = "", status: str = "All", project_id: str = None, jc_id: str = None, limit: int = 50) -> pd.DataFrame:
+    """Fetches formatted jobs matching Everest screenshot #media_1789708516090.png"""
+    where_clauses = []
+    params = []
+    
+    if status != "All":
+        where_clauses.append("j.status = ?")
+        params.append(status)
+    if project_id:
+        where_clauses.append("j.project_id = ?")
+        params.append(project_id)
+    if jc_id:
+        where_clauses.append("j.jc_id = ?")
+        params.append(jc_id)
+    if search:
+        where_clauses.append("(j.name LIKE ? OR p.name LIKE ? OR ej.name LIKE ?)")
+        s = f"%{search}%"
+        params.extend([s, s, s])
+        
+    where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+    sql = f"""
+    SELECT 
+        j.id,
+        j.name AS "Job Name",
+        COALESCE(j.type, 'General') AS "Type",
+        p.name AS "Project",
+        j.status AS "Status",
+        COALESCE(ej.name, 'Unassigned') AS "JC (Job Coordinator)",
+        COALESCE(j.start_date, '-') AS "Start Date",
+        COALESCE(j.end_date, '-') AS "End Date",
+        COALESCE(j.allocated_hours, 0) AS "Budget (hrs)"
+    FROM jobs j
+    JOIN projects p ON j.project_id = p.id
+    LEFT JOIN employees ej ON j.jc_id = ej.id
+    {where_sql}
+    ORDER BY 
+        CASE 
+            WHEN j.name IN ('Mobile UI Design & Prototype', 'Backend API Architecture & DB Sync', 'Security Audit & Cloud Compliance') THEN 0 
+            ELSE 1 
+        END,
+        j.start_date DESC
+    LIMIT {limit};
+    """
+    return run_query(sql, tuple(params) if params else None)
+
+def get_everest_billables_view(search: str = "", status: str = "All", project_id: str = None, limit: int = 50) -> pd.DataFrame:
+    """Fetches formatted billables matching Everest screenshot #media_1789708516099.png"""
+    where_clauses = []
+    params = []
+    
+    if status != "All":
+        where_clauses.append("b.status = ?")
+        params.append(status)
+    if project_id:
+        where_clauses.append("b.project_id = ?")
+        params.append(project_id)
+    if search:
+        where_clauses.append("(b.name LIKE ? OR p.name LIKE ?)")
+        s = f"%{search}%"
+        params.extend([s, s])
+        
+    where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+    sql = f"""
+    SELECT 
+        b.id,
+        b.name AS "Billable Item",
+        b.status AS "Status",
+        COALESCE(b.amount, 0) AS "Amount (USD)",
+        p.name AS "Project",
+        COALESCE(j.name, 'Milestone') AS "Job",
+        COALESCE(b.billing_date, '-') AS "Billing Date",
+        COALESCE(b.due_date, '-') AS "Due Date",
+        COALESCE(ej.name, '-') AS "JC",
+        COALESCE(ea.name, '-') AS "AM",
+        COALESCE(es.name, '-') AS "SC"
+    FROM billables b
+    JOIN projects p ON b.project_id = p.id
+    LEFT JOIN jobs j ON b.job_id = j.id
+    LEFT JOIN employees ej ON j.jc_id = ej.id
+    LEFT JOIN employees ea ON p.am_id = ea.id
+    LEFT JOIN employees es ON p.sc_id = es.id
+    {where_sql}
+    ORDER BY b.billing_date DESC
+    LIMIT {limit};
+    """
+    return run_query(sql, tuple(params) if params else None)
+
+def get_everest_overdue_extensions_view(search: str = "", limit: int = 50) -> pd.DataFrame:
+    """Fetches overdue & extended billables matching Everest screenshot #media_1789708547862.png"""
+    where_clauses = []
+    params = []
+    if search:
+        where_clauses.append("(b.name LIKE ? OR p.name LIKE ? OR be.justification LIKE ?)")
+        s = f"%{search}%"
+        params.extend([s, s, s])
+        
+    where_sql = f"AND {' AND '.join(where_clauses)}" if where_clauses else ""
+    sql = f"""
+    SELECT 
+        b.name AS "Billable Item",
+        p.name AS "Project",
+        COALESCE(j.name, '-') AS "Job",
+        b.amount AS "Amount (USD)",
+        b.status AS "Status",
+        be.start_date AS "Original Date",
+        be.billing_date AS "Extended Date",
+        COALESCE(be.justification, 'Client dependency') AS "Extension Reason",
+        COALESCE(ej.name, '-') AS "JC",
+        COALESCE(ep.name, '-') AS "PC"
+    FROM billable_extensions be
+    JOIN billables b ON be.billable_id = b.id
+    JOIN projects p ON b.project_id = p.id
+    LEFT JOIN jobs j ON b.job_id = j.id
+    LEFT JOIN employees ej ON j.jc_id = ej.id
+    LEFT JOIN employees ep ON p.pc_id = ep.id
+    WHERE 1=1 {where_sql}
+    ORDER BY be.date_created DESC
+    LIMIT {limit};
+    """
+    return run_query(sql, tuple(params) if params else None)
+
+def reset_demo_handover_data():
+    """Resets Ganesh Thamangalath's 3 active jobs and Property Vibees PC for live demo testing."""
+    import uuid
+    ganesh_id = "6d5eb96c-13c9-41b1-a3ad-b1229918c710"
+    
+    # 1. Clean previous copies
+    job_titles = [
+        "Mobile UI Design & Prototype",
+        "Backend API Architecture & DB Sync",
+        "Security Audit & Cloud Compliance"
+    ]
+    for jt in job_titles:
+        j_rows = run_query("SELECT id FROM jobs WHERE name = ?", (jt,)).to_dict('records')
+        for jr in j_rows:
+            jid = jr["id"]
+            execute_update("DELETE FROM job_allocations WHERE job_id = ?", (jid,))
+            execute_update("DELETE FROM timesheets WHERE job_id = ?", (jid,))
+            execute_update("DELETE FROM jobs WHERE id = ?", (jid,))
+
+    # 2. Get 3 active projects
+    projs = run_query("SELECT id FROM projects WHERE status = 'Active' LIMIT 3").to_dict('records')
+    p0 = projs[0]["id"] if projs else "00c26944-8a57-4274-bce4-408acc8329fc"
+    p1 = projs[1]["id"] if len(projs) > 1 else p0
+    p2 = projs[2]["id"] if len(projs) > 2 else p0
+
+    job_configs = [
+        ("Mobile UI Design & Prototype", p0, "In Progress", "Design"),
+        ("Backend API Architecture & DB Sync", p1, "In Progress", "Development"),
+        ("Security Audit & Cloud Compliance", p2, "In Progress", "DevOps")
+    ]
+
+    for jname, pid, status, jtype in job_configs:
+        jid = str(uuid.uuid4())
+        execute_update("""
+            INSERT INTO jobs (id, project_id, name, type, status, start_date, end_date, allocated_hours, jc_id)
+            VALUES (?, ?, ?, ?, ?, '2026-03-01', '2026-05-30', 40.0, ?)
+        """, (jid, pid, jname, jtype, status, ganesh_id))
+        
+        execute_update("""
+            INSERT INTO job_allocations (id, job_id, employee_id, allocated_hours, is_shadow)
+            VALUES (?, ?, ?, 40.0, 0)
+        """, (str(uuid.uuid4()), jid, ganesh_id))
+
+    # Set Property Vibees PC to Ganesh
+    execute_update("UPDATE projects SET pc_id = ? WHERE name = 'Property Vibees'", (ganesh_id,))
+    return True
+
