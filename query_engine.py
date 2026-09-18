@@ -1158,3 +1158,117 @@ def reset_demo_handover_data():
     execute_update("UPDATE projects SET pc_id = ? WHERE name = 'Property Vibees'", (ganesh_id,))
     return True
 
+def get_everest_contracts_view(search: str = "", status: str = "All", limit: int = 50) -> pd.DataFrame:
+    """Fetches formatted contracts matching Everest screenshot 05_Work_Contracts.png"""
+    where_clauses = []
+    params = []
+    if status != "All":
+        where_clauses.append("c.status = ?")
+        params.append(status)
+    if search:
+        where_clauses.append("(c.name LIKE ? OR p.name LIKE ?)")
+        s = f"%{search}%"
+        params.extend([s, s])
+    where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+    sql = f"""
+    SELECT 
+        c.id,
+        c.name AS "Contract Name",
+        COALESCE(c.type, 'Fixed') AS "Type",
+        c.status AS "Status",
+        COALESCE(p.name, 'Client Project') AS "Project",
+        (SELECT COUNT(*) FROM jobs WHERE project_id = p.id) AS "Jobs Count"
+    FROM contracts c
+    LEFT JOIN projects p ON c.project_id = p.id
+    {where_sql}
+    ORDER BY c.id DESC
+    LIMIT {limit};
+    """
+    return run_query(sql, tuple(params) if params else None)
+
+def get_everest_tasks_view(search: str = "", status: str = "All", limit: int = 50) -> pd.DataFrame:
+    """Fetches formatted tasks matching Everest screenshot 03_Tasks.png"""
+    where_clauses = []
+    params = []
+    if status != "All":
+        where_clauses.append("t.status = ?")
+        params.append(status)
+    if search:
+        where_clauses.append("(t.title LIKE ? OR e.name LIKE ?)")
+        s = f"%{search}%"
+        params.extend([s, s])
+    where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+    sql = f"""
+    SELECT 
+        t.id,
+        t.title AS "Task Title",
+        t.status AS "Status",
+        COALESCE(t.type, 'General') AS "Type",
+        COALESCE(t.due_date, '-') AS "Due Date",
+        COALESCE(e.name, 'Unassigned') AS "Assignee"
+    FROM tasks t
+    LEFT JOIN employees e ON t.assignee = e.id
+    {where_sql}
+    ORDER BY t.date_created DESC
+    LIMIT {limit};
+    """
+    return run_query(sql, tuple(params) if params else None)
+
+def get_everest_timesheets_view(search: str = "", limit: int = 50) -> pd.DataFrame:
+    """Fetches formatted timesheet logs matching Everest screenshot 12_Timesheet_My_Team.png"""
+    where_clauses = []
+    params = []
+    if search:
+        where_clauses.append("(e.name LIKE ? OR p.name LIKE ? OR j.name LIKE ?)")
+        s = f"%{search}%"
+        params.extend([s, s, s])
+    where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+    sql = f"""
+    SELECT 
+        ts.date AS "Date",
+        e.name AS "Employee",
+        p.name AS "Project",
+        j.name AS "Job",
+        COALESCE(ts.logged_hours, 0) AS "Logged (hrs)",
+        COALESCE(ts.approved_hours, 0) AS "Approved (hrs)",
+        ts.status AS "Status"
+    FROM timesheets ts
+    JOIN employees e ON ts.employee_id = e.id
+    JOIN jobs j ON ts.job_id = j.id
+    JOIN projects p ON j.project_id = p.id
+    {where_sql}
+    ORDER BY ts.date DESC
+    LIMIT {limit};
+    """
+    return run_query(sql, tuple(params) if params else None)
+
+def get_everest_employees_view(search: str = "", department: str = "All", limit: int = 50) -> pd.DataFrame:
+    """Fetches formatted employee directory matching Everest screenshot 18_Org_Employees.png"""
+    where_clauses = []
+    params = []
+    if department != "All":
+        where_clauses.append("e.department = ?")
+        params.append(department)
+    if search:
+        where_clauses.append("(e.name LIKE ? OR e.email LIKE ? OR e.role LIKE ?)")
+        s = f"%{search}%"
+        params.extend([s, s, s])
+    where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+    sql = f"""
+    SELECT 
+        e.id,
+        e.name AS "Name",
+        COALESCE(e.role, 'Engineer') AS "Designation",
+        COALESCE(e.grade, 'A0') AS "Grade",
+        COALESCE(e.department, 'Engineering') AS "Department",
+        e.email AS "Email",
+        e.status AS "Status",
+        COALESCE(e.allocable, 'Yes') AS "Allocable",
+        COALESCE(e.joining_date, '2024-01-01') AS "Joining Date"
+    FROM employees e
+    {where_sql}
+    ORDER BY e.name ASC
+    LIMIT {limit};
+    """
+    return run_query(sql, tuple(params) if params else None)
+

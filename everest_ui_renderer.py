@@ -494,3 +494,227 @@ def render_inbox_table(notifications, active_tab: str = "Pending", active_catego
     </div>
     """
     return inbox_container
+
+def render_contracts_table(df, limit: int = 25):
+    """Renders pixel-perfect Everest Contracts directory matching 05_Work_Contracts.png"""
+    if df is None or df.empty:
+        return """<div style="padding:24px; text-align:center; color:#64748b; background:#fff; border-radius:8px; border:1px solid #e2e8f0;">No active contracts found.</div>"""
+        
+    rows_html = []
+    display_df = df.head(limit)
+    for idx, r in display_df.iterrows():
+        cname = str(r.get("Contract Name", ""))
+        ctype = str(r.get("Type", "Fixed"))
+        status = str(r.get("Status", "In Progress"))
+        proj = str(r.get("Project", "-"))
+        jobs_cnt = str(r.get("Jobs Count", "1"))
+        
+        type_icon = "⏱" if "Hourly" in cname or "Hourly" in ctype else ("$" if "Fixed" in cname or "Fixed" in ctype else ("⇄" if "Recurring" in cname else "🗑"))
+        
+        row_html = f"""
+        <tr style="background-color: #ffffff; border-bottom: 1px solid #f1f5f9; height: 46px;">
+            <td style="padding: 8px 14px; color: #64748b; font-size: 0.82rem; width: 40px;">{idx + 1}</td>
+            <td style="padding: 8px 14px; font-weight: 600; color: #0f172a; font-size: 0.86rem;">{html.escape(cname)}</td>
+            <td style="padding: 8px 14px; text-align: center; color: #64748b; font-size: 0.95rem;">{type_icon}</td>
+            <td style="padding: 8px 14px; width: 110px;">{render_status_pill(status)}</td>
+            <td style="padding: 8px 14px; color: #334155; font-size: 0.85rem; font-weight: 500;">{html.escape(proj)}</td>
+            <td style="padding: 8px 14px; color: #0f172a; font-weight: 600; font-size: 0.84rem;">{jobs_cnt}</td>
+        </tr>
+        """
+        rows_html.append(row_html)
+        
+    return f"""
+    <div style="background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.02); font-family: 'Inter', sans-serif;">
+        <table style="width: 100%; border-collapse: collapse; text-align: left;">
+            <thead>
+                <tr style="background-color: #f8fafc; border-bottom: 1px solid #e2e8f0; height: 38px;">
+                    <th style="padding: 6px 14px; color: #475569; font-size: 0.76rem; font-weight: 600;">#</th>
+                    <th style="padding: 6px 14px; color: #475569; font-size: 0.76rem; font-weight: 600;">Name</th>
+                    <th style="padding: 6px 14px; color: #475569; font-size: 0.76rem; font-weight: 600; text-align: center;">Type</th>
+                    <th style="padding: 6px 14px; color: #475569; font-size: 0.76rem; font-weight: 600;">Status</th>
+                    <th style="padding: 6px 14px; color: #475569; font-size: 0.76rem; font-weight: 600;">Project</th>
+                    <th style="padding: 6px 14px; color: #475569; font-size: 0.76rem; font-weight: 600;">Jobs</th>
+                </tr>
+            </thead>
+            <tbody>
+                {''.join(rows_html)}
+            </tbody>
+        </table>
+        <div style="display: flex; align-items: center; justify-content: space-between; padding: 10px 16px; background-color: #ffffff; border-top: 1px solid #f1f5f9; font-size: 0.8rem; color: #64748b;">
+            <div>Showing 1 to {len(display_df)} of {len(df)} contracts</div>
+        </div>
+    </div>
+    """
+
+def render_tasks_table(df, limit: int = 25):
+    """Renders pixel-perfect Everest Tasks directory matching 03_Tasks.png"""
+    if df is None or df.empty:
+        return """<div style="padding:40px; text-align:center; color:#64748b; background:#fff; border-radius:8px; border:1px solid #e2e8f0;">No tasks found.</div>"""
+        
+    rows_html = []
+    display_df = df.head(limit)
+    for idx, r in display_df.iterrows():
+        title = str(r.get("Task Title", ""))
+        status = str(r.get("Status", "Open"))
+        ttype = str(r.get("Type", "General"))
+        due = str(r.get("Due Date", "-"))
+        assignee = str(r.get("Assignee", "Unassigned"))
+        
+        row_html = f"""
+        <tr style="background-color: #ffffff; border-bottom: 1px solid #f1f5f9; height: 46px;">
+            <td style="padding: 8px 14px; color: #64748b; font-size: 0.82rem; width: 40px;">{idx + 1}</td>
+            <td style="padding: 8px 14px; font-weight: 600; color: #0f172a; font-size: 0.86rem;">{html.escape(title)}</td>
+            <td style="padding: 8px 14px; width: 100px;">{render_status_pill(status)}</td>
+            <td style="padding: 8px 14px; color: #64748b; font-size: 0.84rem;">{html.escape(ttype)}</td>
+            <td style="padding: 8px 14px; color: #64748b; font-size: 0.82rem; white-space: nowrap;">{html.escape(due)}</td>
+            <td style="padding: 8px 14px;">{render_avatar_with_name(assignee)}</td>
+        </tr>
+        """
+        rows_html.append(row_html)
+        
+    return f"""
+    <div style="background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.02); font-family: 'Inter', sans-serif;">
+        <table style="width: 100%; border-collapse: collapse; text-align: left;">
+            <thead>
+                <tr style="background-color: #f8fafc; border-bottom: 1px solid #e2e8f0; height: 38px;">
+                    <th style="padding: 6px 14px; color: #475569; font-size: 0.76rem; font-weight: 600;">#</th>
+                    <th style="padding: 6px 14px; color: #475569; font-size: 0.76rem; font-weight: 600;">Task Title</th>
+                    <th style="padding: 6px 14px; color: #475569; font-size: 0.76rem; font-weight: 600;">Status</th>
+                    <th style="padding: 6px 14px; color: #475569; font-size: 0.76rem; font-weight: 600;">Type</th>
+                    <th style="padding: 6px 14px; color: #475569; font-size: 0.76rem; font-weight: 600;">Due Date</th>
+                    <th style="padding: 6px 14px; color: #475569; font-size: 0.76rem; font-weight: 600;">Assignee</th>
+                </tr>
+            </thead>
+            <tbody>
+                {''.join(rows_html)}
+            </tbody>
+        </table>
+        <div style="display: flex; align-items: center; justify-content: space-between; padding: 10px 16px; background-color: #ffffff; border-top: 1px solid #f1f5f9; font-size: 0.8rem; color: #64748b;">
+            <div>Showing 1 to {len(display_df)} of {len(df)} entries</div>
+        </div>
+    </div>
+    """
+
+def render_timesheet_table(df, limit: int = 25):
+    """Renders pixel-perfect Everest Timesheet logs matching 12_Timesheet_My_Team.png"""
+    if df is None or df.empty:
+        return """<div style="padding:24px; text-align:center; color:#64748b; background:#fff; border-radius:8px; border:1px solid #e2e8f0;">No timesheet entries found.</div>"""
+        
+    rows_html = []
+    display_df = df.head(limit)
+    for idx, r in display_df.iterrows():
+        tdate = str(r.get("Date", "-"))
+        emp = str(r.get("Employee", "Colleague"))
+        proj = str(r.get("Project", "-"))
+        job = str(r.get("Job", "-"))
+        logged = f"{float(r.get('Logged (hrs)', 0)):.1f}h"
+        approved = f"{float(r.get('Approved (hrs)', 0)):.1f}h"
+        status = str(r.get("Status", "approved"))
+        
+        row_html = f"""
+        <tr style="background-color: #ffffff; border-bottom: 1px solid #f1f5f9; height: 46px;">
+            <td style="padding: 8px 14px; color: #64748b; font-size: 0.82rem; width: 40px;">{idx + 1}</td>
+            <td style="padding: 8px 14px; color: #64748b; font-size: 0.82rem; white-space: nowrap;">{html.escape(tdate)}</td>
+            <td style="padding: 8px 14px;">{render_avatar_with_name(emp)}</td>
+            <td style="padding: 8px 14px; color: #334155; font-size: 0.85rem; font-weight: 500;">{html.escape(proj)}</td>
+            <td style="padding: 8px 14px; color: #64748b; font-size: 0.82rem;">{html.escape(job)}</td>
+            <td style="padding: 8px 14px; font-weight: 600; color: #0f172a; font-size: 0.84rem;">{logged}</td>
+            <td style="padding: 8px 14px; font-weight: 600; color: #059669; font-size: 0.84rem;">{approved}</td>
+            <td style="padding: 8px 14px;">{render_status_pill(status)}</td>
+        </tr>
+        """
+        rows_html.append(row_html)
+        
+    return f"""
+    <div style="background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.02); font-family: 'Inter', sans-serif;">
+        <table style="width: 100%; border-collapse: collapse; text-align: left;">
+            <thead>
+                <tr style="background-color: #f8fafc; border-bottom: 1px solid #e2e8f0; height: 38px;">
+                    <th style="padding: 6px 14px; color: #475569; font-size: 0.76rem; font-weight: 600;">#</th>
+                    <th style="padding: 6px 14px; color: #475569; font-size: 0.76rem; font-weight: 600;">Date</th>
+                    <th style="padding: 6px 14px; color: #475569; font-size: 0.76rem; font-weight: 600;">Employee</th>
+                    <th style="padding: 6px 14px; color: #475569; font-size: 0.76rem; font-weight: 600;">Project</th>
+                    <th style="padding: 6px 14px; color: #475569; font-size: 0.76rem; font-weight: 600;">Job</th>
+                    <th style="padding: 6px 14px; color: #475569; font-size: 0.76rem; font-weight: 600;">Logged</th>
+                    <th style="padding: 6px 14px; color: #475569; font-size: 0.76rem; font-weight: 600;">Approved</th>
+                    <th style="padding: 6px 14px; color: #475569; font-size: 0.76rem; font-weight: 600;">Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                {''.join(rows_html)}
+            </tbody>
+        </table>
+        <div style="display: flex; align-items: center; justify-content: space-between; padding: 10px 16px; background-color: #ffffff; border-top: 1px solid #f1f5f9; font-size: 0.8rem; color: #64748b;">
+            <div>Showing 1 to {len(display_df)} of {len(df)} entries</div>
+        </div>
+    </div>
+    """
+
+def render_employees_table(df, limit: int = 25):
+    """Renders pixel-perfect Everest Employees directory matching 18_Org_Employees.png"""
+    if df is None or df.empty:
+        return """<div style="padding:24px; text-align:center; color:#64748b; background:#fff; border-radius:8px; border:1px solid #e2e8f0;">No employees found.</div>"""
+        
+    rows_html = []
+    display_df = df.head(limit)
+    dept_colors = {
+        "Engineering": ("#eff6ff", "#1d4ed8"),
+        "Delivery": ("#fef3c7", "#92400e"),
+        "Design": ("#fdf2f8", "#be185d"),
+        "Quality": ("#ecfdf5", "#047857"),
+        "Marketing": ("#f5f3ff", "#6d28d9"),
+    }
+    
+    for idx, r in display_df.iterrows():
+        ename = str(r.get("Name", ""))
+        role = str(r.get("Designation", "Engineer"))
+        grade = str(r.get("Grade", "A0"))
+        dept = str(r.get("Department", "Engineering"))
+        email = str(r.get("Email", ""))
+        alloc = str(r.get("Allocable", "Yes"))
+        
+        bg_d, fg_d = dept_colors.get(dept, ("#f1f5f9", "#475569"))
+        dept_badge = f'<span style="background:{bg_d}; color:{fg_d}; padding:3px 8px; border-radius:6px; font-size:0.75rem; font-weight:600;">{dept}</span>'
+        
+        row_html = f"""
+        <tr style="background-color: #ffffff; border-bottom: 1px solid #f1f5f9; height: 50px;">
+            <td style="padding: 8px 14px; color: #64748b; font-size: 0.82rem; width: 40px;">{idx + 1}</td>
+            <td style="padding: 8px 14px;">
+                <div style="display:flex; align-items:center; gap:10px;">
+                    {render_avatar_circle(ename, size=30)}
+                    <div>
+                        <div style="font-weight: 600; color: #0f172a; font-size: 0.86rem;">{html.escape(ename)}</div>
+                        <div style="font-size: 0.74rem; color: #64748b;">{html.escape(role)} • {html.escape(grade)}</div>
+                    </div>
+                </div>
+            </td>
+            <td style="padding: 8px 14px;">{dept_badge}</td>
+            <td style="padding: 8px 14px; color: #475569; font-size: 0.82rem;">{html.escape(email)}</td>
+            <td style="padding: 8px 14px; text-align: center; font-size: 0.82rem; color: {'#059669' if alloc == 'Yes' else '#64748b'}; font-weight: 600;">{alloc}</td>
+            <td style="padding: 8px 14px;">{render_status_pill('Active')}</td>
+        </tr>
+        """
+        rows_html.append(row_html)
+        
+    return f"""
+    <div style="background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.02); font-family: 'Inter', sans-serif;">
+        <table style="width: 100%; border-collapse: collapse; text-align: left;">
+            <thead>
+                <tr style="background-color: #f8fafc; border-bottom: 1px solid #e2e8f0; height: 38px;">
+                    <th style="padding: 6px 14px; color: #475569; font-size: 0.76rem; font-weight: 600;">#</th>
+                    <th style="padding: 6px 14px; color: #475569; font-size: 0.76rem; font-weight: 600;">Name & Role</th>
+                    <th style="padding: 6px 14px; color: #475569; font-size: 0.76rem; font-weight: 600;">Department</th>
+                    <th style="padding: 6px 14px; color: #475569; font-size: 0.76rem; font-weight: 600;">Email</th>
+                    <th style="padding: 6px 14px; color: #475569; font-size: 0.76rem; font-weight: 600; text-align: center;">Allocable</th>
+                    <th style="padding: 6px 14px; color: #475569; font-size: 0.76rem; font-weight: 600;">Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                {''.join(rows_html)}
+            </tbody>
+        </table>
+        <div style="display: flex; align-items: center; justify-content: space-between; padding: 10px 16px; background-color: #ffffff; border-top: 1px solid #f1f5f9; font-size: 0.8rem; color: #64748b;">
+            <div>Showing 1 to {len(display_df)} of {len(df)} employees</div>
+        </div>
+    </div>
+    """
