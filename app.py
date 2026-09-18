@@ -2,7 +2,6 @@
 import os
 import streamlit as st
 import pandas as pd
-import plotly.express as px
 from datetime import date
 import csv_importer
 from database import get_database_status, get_all_employees
@@ -18,6 +17,7 @@ from query_engine import (
     get_everest_overdue_extensions_view,
     reset_demo_handover_data
 )
+import everest_ui_renderer as ur
 
 # ----------------- PAGE CONFIGURATION -----------------
 st.set_page_config(
@@ -62,7 +62,7 @@ st.markdown("""
         margin-bottom: 3px !important;
         color: #475569 !important;
         font-weight: 500 !important;
-        font-size: 0.92rem !important;
+        font-size: 0.90rem !important;
         cursor: pointer !important;
         transition: all 0.15s ease !important;
     }
@@ -110,102 +110,19 @@ st.markdown("""
         color: #64748b;
     }
     
-    /* Top Navigation Bar */
-    .top-navbar {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        padding-bottom: 12px;
-        margin-bottom: 16px;
-        border-bottom: 1px solid #f1f5f9;
-    }
+    /* Breadcrumbs */
     .breadcrumb-text {
-        font-size: 0.88rem;
+        font-size: 0.85rem;
         color: #64748b;
         font-weight: 500;
+        margin-bottom: 4px;
     }
     .breadcrumb-current {
         color: #0f172a;
         font-weight: 600;
     }
     
-    /* Quick Links Grid Card */
-    .quick-link-box {
-        background-color: #ffffff;
-        border: 1px solid #e2e8f0;
-        border-radius: 10px;
-        padding: 14px 16px;
-        display: flex;
-        align-items: center;
-        gap: 14px;
-        transition: all 0.15s ease-in-out;
-        margin-bottom: 12px;
-    }
-    .quick-link-box:hover {
-        border-color: #cbd5e1;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.04);
-        transform: translateY(-1px);
-    }
-    .quick-icon-box {
-        width: 42px;
-        height: 42px;
-        border-radius: 8px;
-        background-color: #fee2e2;
-        color: #E22D2D;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 1.3rem;
-        flex-shrink: 0;
-    }
-    .quick-title-text {
-        font-size: 0.95rem;
-        font-weight: 600;
-        color: #1e293b;
-        margin-bottom: 2px;
-    }
-    .quick-subtitle-text {
-        font-size: 0.78rem;
-        color: #64748b;
-    }
-    
-    /* Chatbot Panel Container */
-    .chatbot-container {
-        background-color: #ffffff;
-        border: 1px solid #e2e8f0;
-        border-radius: 14px;
-        padding: 14px;
-        box-shadow: 0 10px 25px -5px rgba(0,0,0,0.06);
-    }
-    .chatbot-header {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        padding-bottom: 10px;
-        margin-bottom: 12px;
-        border-bottom: 1px solid #f1f5f9;
-    }
-    .chatbot-title {
-        font-weight: 700;
-        font-size: 1.05rem;
-        color: #E22D2D;
-        display: flex;
-        align-items: center;
-        gap: 8px;
-    }
-    .online-badge {
-        font-size: 0.72rem;
-        background-color: #def7ec;
-        color: #03543f;
-        padding: 2px 8px;
-        border-radius: 12px;
-        font-weight: 600;
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
-    }
-    
-    /* User Profile Footer in Sidebar */
+    /* Profile Footer */
     .profile-footer {
         display: flex;
         align-items: center;
@@ -228,6 +145,39 @@ st.markdown("""
         font-weight: 600;
         font-size: 0.85rem;
     }
+
+    /* Chatbot Box */
+    .chatbot-card {
+        background-color: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 12px;
+        padding: 16px;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.05);
+    }
+    .chatbot-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding-bottom: 10px;
+        border-bottom: 1px solid #f1f5f9;
+        margin-bottom: 12px;
+    }
+    .chatbot-title {
+        font-size: 1.02rem;
+        font-weight: 700;
+        color: #dc2626;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+    .online-badge {
+        font-size: 0.72rem;
+        background-color: #def7ec;
+        color: #03543f;
+        padding: 2px 8px;
+        border-radius: 9999px;
+        font-weight: 600;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -237,8 +187,8 @@ if "messages" not in st.session_state:
         {
             "role": "assistant",
             "content": "Hello! 👋 I'm your **Everest AI Assistant**.\n\n"
-                       "I can look up projects, revenue, or **reassign jobs in real-time** when someone leaves.\n\n"
-                       "💡 **Try 1-Click Handover:** Click the red button below to assign Ganesh's jobs to **Jay Patel, Bhavik Vachhani, and Dhruv Nayak** and watch the Jobs table on the left update live!",
+                       "I can answer operational questions, audit project roles, or **reassign jobs in real time** when employees depart.\n\n"
+                       "💡 **Test 1-Click Handover:** Click the red button below to assign Ganesh's 3 active jobs to **Jay Patel, Bhavik Vachhani, and Dhruv Nayak**, and see the Jobs table update live on the left!",
             "data": None
         }
     ]
@@ -259,7 +209,7 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
     
-    # Modern Navigation without radio dots
+    # Modern Navigation
     nav_selection = st.radio(
         "Navigation Menu",
         [
@@ -268,10 +218,10 @@ with st.sidebar:
             "💰 Work: Billables",
             "🏠 Home (Quick Links)",
             "⏳ Reports: Overdue & Extensions",
-            "🔄 Operations: Handover Assistant",
-            "📂 Settings: Bulk CSV Ingestion"
+            "🔄 Operations: Handover SOP",
+            "📂 Settings: Bulk CSV Sync"
         ],
-        index=0,  # DEFAULT TO JOBS DIRECTORY!
+        index=0,  # DEFAULT TO JOBS VIEW
         label_visibility="collapsed"
     )
     
@@ -279,12 +229,12 @@ with st.sidebar:
     
     # Assistant Toggle
     st.markdown("##### **🤖 AI Co-Pilot**")
-    assistant_toggle = st.toggle("Show Everest AI Chatbot", value=st.session_state["show_assistant"])
+    assistant_toggle = st.toggle("Show Everest AI Assistant", value=st.session_state["show_assistant"])
     st.session_state["show_assistant"] = assistant_toggle
     
     st.markdown("---")
     
-    # Live Database Metric
+    # Live Database Metrics
     db_status = get_database_status()
     if db_status["connected"]:
         st.caption("🟢 **Everest Database Connected**")
@@ -293,10 +243,10 @@ with st.sidebar:
             st.metric("Projects", db_status["projects"])
             st.metric("Active Jobs", "2,610")
         with m2:
-            st.metric("Employees", db_status["employees"])
+            st.metric("Staff", db_status["employees"])
             st.metric("Collected", "$235M+")
             
-    # Bottom Profile (Matching user's screenshot #media_1789706458175.png)
+    # Bottom Profile (Matching user's screenshot media_1789706458175.png)
     st.markdown("""
     <div class="profile-footer">
         <div class="profile-avatar">GT</div>
@@ -309,7 +259,7 @@ with st.sidebar:
     
     if st.button("🔄 Reset Demo Jobs (Ganesh)", use_container_width=True):
         reset_demo_handover_data()
-        st.toast("✅ Ganesh's 3 demo jobs reset! Ready for handover test.")
+        st.toast("✅ Ganesh's 3 demo jobs reset to initial state!")
         st.rerun()
 
 # ----------------- MAIN EVEREST ERP CONTENT -----------------
@@ -319,29 +269,29 @@ def render_erp_content():
         st.markdown("<div class='breadcrumb-text'>Work > <span class='breadcrumb-current'>Jobs</span></div>", unsafe_allow_html=True)
         st.markdown("### **Jobs**")
         
-        # Friendly non-technical banner
-        st.info("💡 **Live Handover Verification:** The 3 jobs below belong to **Ganesh Thamangalath**. "
-                "Use the AI Assistant on the right (or type a message) to assign them to other colleagues, and watch the **'JC (Job Coordinator)'** column update right here in real time!")
+        # User-friendly banner explaining the live demo
+        st.info("💡 **Live Handover Verification:** The 3 highlighted rows below belong to **Ganesh Thamangalath**. "
+                "Use the AI Assistant on the right (or 1-click handover) to reassign them to colleagues, and watch the **'JC'** column update right here in real time!")
         
-        # Toolbar matching Everest screenshot
-        c_search, c_status, c_add = st.columns([3, 1.5, 1])
+        # Top toolbar
+        c_search, c_status, c_filter = st.columns([3.5, 1.5, 1])
         with c_search:
             search_job = st.text_input("Search jobs...", placeholder="🔍 Search job title, project, or coordinator...", label_visibility="collapsed", key="s_job")
         with c_status:
             status_job = st.selectbox("Status", ["All", "In Progress", "Completed", "In Review"], label_visibility="collapsed", key="st_job")
-        with c_add:
-            st.button("➕ Job", type="primary", use_container_width=True)
+        with c_filter:
+            st.button("⚙️ Filters", use_container_width=True)
             
-        df_jobs = get_everest_jobs_view(search=search_job, status=status_job, limit=30)
-        st.dataframe(df_jobs, use_container_width=True, hide_index=True)
-        st.caption(f"Showing {len(df_jobs)} active jobs from Everest ERP database.")
+        df_jobs = get_everest_jobs_view(search=search_job, status=status_job, limit=25)
+        # Render authentic Everest table!
+        st.markdown(ur.render_jobs_table(df_jobs), unsafe_allow_html=True)
 
     # 2. PROJECTS DIRECTORY VIEW
     elif "Projects" in nav_selection:
         st.markdown("<div class='breadcrumb-text'>Work > <span class='breadcrumb-current'>Projects</span></div>", unsafe_allow_html=True)
         st.markdown("### **Projects**")
         
-        c_search, c_status, c_add = st.columns([3, 1.5, 1])
+        c_search, c_status, c_add = st.columns([3, 1.5, 1.2])
         with c_search:
             search_proj = st.text_input("Search projects...", placeholder="🔍 Search project name or client...", label_visibility="collapsed", key="s_proj")
         with c_status:
@@ -349,9 +299,9 @@ def render_erp_content():
         with c_add:
             st.button("➕ Project", type="primary", use_container_width=True)
             
-        df_proj = get_everest_projects_view(search=search_proj, status=status_proj, limit=30)
-        st.dataframe(df_proj, use_container_width=True, hide_index=True)
-        st.caption(f"Showing top {len(df_proj)} active projects with PC, AM, SC ownership.")
+        df_proj = get_everest_projects_view(search=search_proj, status=status_proj, limit=25)
+        # Render authentic Everest table!
+        st.markdown(ur.render_projects_table(df_proj), unsafe_allow_html=True)
 
     # 3. BILLABLES VIEW
     elif "Billables" in nav_selection:
@@ -360,44 +310,20 @@ def render_erp_content():
         
         c_search, c_status = st.columns([3.5, 1.5])
         with c_search:
-            search_bill = st.text_input("Search billables...", placeholder="🔍 Search milestone or project...", label_visibility="collapsed", key="s_bill")
+            search_bill = st.text_input("Search billables...", placeholder="🔍 Search billable item or project...", label_visibility="collapsed", key="s_bill")
         with c_status:
             status_bill = st.selectbox("Status", ["All", "collected", "billed", "contracted"], label_visibility="collapsed", key="st_bill")
             
-        df_bill = get_everest_billables_view(search=search_bill, status=status_bill, limit=30)
-        st.dataframe(df_bill, use_container_width=True, hide_index=True)
-        st.caption(f"Showing {len(df_bill)} billables with revenue status and coordinator details.")
+        df_bill = get_everest_billables_view(search=search_bill, status=status_bill, limit=25)
+        # Render authentic Everest table!
+        st.markdown(ur.render_billables_table(df_bill), unsafe_allow_html=True)
 
     # 4. HOME (QUICK LINKS) VIEW
     elif "Home" in nav_selection:
         st.markdown("<div class='breadcrumb-text'>Home</div>", unsafe_allow_html=True)
         st.markdown("### **Quick Links**")
-        
-        q1, q2, q3, q4 = st.columns(4)
-        with q1:
-            st.markdown("""
-            <div class="quick-link-box"><div class="quick-icon-box">📢</div><div><div class="quick-title-text">What's New</div><div class="quick-subtitle-text">Check latest updates</div></div></div>
-            <div class="quick-link-box"><div class="quick-icon-box">📋</div><div><div class="quick-title-text">Manpower Requisition</div><div class="quick-subtitle-text">Headcount forms</div></div></div>
-            <div class="quick-link-box"><div class="quick-icon-box">💬</div><div><div class="quick-title-text">Discord</div><div class="quick-subtitle-text">Team chat and calls</div></div></div>
-            """, unsafe_allow_html=True)
-        with q2:
-            st.markdown("""
-            <div class="quick-link-box"><div class="quick-icon-box">📚</div><div><div class="quick-title-text">Documentation</div><div class="quick-subtitle-text">Engineering guides</div></div></div>
-            <div class="quick-link-box"><div class="quick-icon-box">🛡️</div><div><div class="quick-title-text">Company Policies</div><div class="quick-subtitle-text">Leave, handover SOPs</div></div></div>
-            <div class="quick-link-box"><div class="quick-icon-box">🎨</div><div><div class="quick-title-text">Draw.io</div><div class="quick-subtitle-text">Architecture diagrams</div></div></div>
-            """, unsafe_allow_html=True)
-        with q3:
-            st.markdown("""
-            <div class="quick-link-box"><div class="quick-icon-box">🔍</div><div><div class="quick-title-text">Case Study Finder</div><div class="quick-subtitle-text">Client success stories</div></div></div>
-            <div class="quick-link-box"><div class="quick-icon-box">🌊</div><div><div class="quick-title-text">Pacific</div><div class="quick-subtitle-text">Company info</div></div></div>
-            <div class="quick-link-box"><div class="quick-icon-box">🐙</div><div><div class="quick-title-text">GitHub</div><div class="quick-subtitle-text">Source code</div></div></div>
-            """, unsafe_allow_html=True)
-        with q4:
-            st.markdown("""
-            <div class="quick-link-box"><div class="quick-icon-box">✍️</div><div><div class="quick-title-text">Feedback & Support</div><div class="quick-subtitle-text">Anonymous feedback</div></div></div>
-            <div class="quick-link-box"><div class="quick-icon-box">🏜️</div><div><div class="quick-title-text">Sahara</div><div class="quick-subtitle-text">Project management</div></div></div>
-            <div class="quick-link-box"><div class="quick-icon-box">⏰</div><div><div class="quick-title-text">Keka</div><div class="quick-subtitle-text">Attendance & payroll</div></div></div>
-            """, unsafe_allow_html=True)
+        # Render authentic 4-column Quick Links grid!
+        st.markdown(ur.render_quick_links_grid(), unsafe_allow_html=True)
 
         st.markdown("---")
         st.markdown("#### **📊 7Span Operational KPIs**")
@@ -416,12 +342,13 @@ def render_erp_content():
         st.markdown("<div class='breadcrumb-text'>Reports > Billables > <span class='breadcrumb-current'>Overdue & Extensions</span></div>", unsafe_allow_html=True)
         st.markdown("### **Overdue & Extended Billables**")
         search_ext = st.text_input("Search extensions...", placeholder="🔍 Search justification or project...", key="s_ext")
-        df_ext = get_everest_overdue_extensions_view(search=search_ext, limit=30)
-        st.dataframe(df_ext, use_container_width=True, hide_index=True)
+        df_ext = get_everest_overdue_extensions_view(search=search_ext, limit=25)
+        # Render authentic Everest table!
+        st.markdown(ur.render_overdue_table(df_ext), unsafe_allow_html=True)
 
-    # 6. HANDOVER MATRIX
+    # 6. OPERATIONS: HANDOVER SOP
     elif "Handover" in nav_selection:
-        st.markdown("<div class='breadcrumb-text'>Operations > <span class='breadcrumb-current'>Handover SOP</span></div>", unsafe_allow_html=True)
+        st.markdown("<div class='breadcrumb-text'>Operations > <span class='breadcrumb-current'>Handover SOP Matrix</span></div>", unsafe_allow_html=True)
         st.markdown("### **Employee Handover SOP Assistant**")
         
         employees = get_all_employees()
@@ -475,7 +402,7 @@ def render_erp_content():
         else:
             st.success("✅ This employee has 0 active responsibilities remaining.")
 
-    # 7. BULK CSV INGESTION
+    # 7. BULK CSV SYNC
     elif "Settings" in nav_selection:
         st.markdown("<div class='breadcrumb-text'>Settings > <span class='breadcrumb-current'>Bulk CSV Sync</span></div>", unsafe_allow_html=True)
         st.markdown("### **Upload & Ingest Everest CSVs (30+ Files Supported)**")
@@ -494,7 +421,7 @@ def render_erp_content():
 # ----------------- SIDE CHATBOT COMPONENT -----------------
 def render_ai_chatbot():
     st.markdown("""
-    <div class="chatbot-container">
+    <div class="chatbot-card">
         <div class="chatbot-header">
             <div class="chatbot-title">
                 <span>🏔️</span> Everest AI Assistant
@@ -503,9 +430,9 @@ def render_ai_chatbot():
         </div>
     """, unsafe_allow_html=True)
     
-    st.caption("Chat with AI to reassign jobs, check projects, or pull financials:")
+    st.caption("Ask questions, audit employees, or trigger live handovers:")
     
-    # Quick 1-Click Action Chips (Super user-friendly for non-technical users!)
+    # 1-Click Action Buttons for Non-Technical Users
     st.markdown("##### **⚡ Quick Actions:**")
     
     if st.button("⚡ Assign Ganesh's 3 Jobs (Jay, Bhavik, Dhruv)", type="primary", use_container_width=True):
@@ -533,7 +460,7 @@ def render_ai_chatbot():
 
     st.markdown("---")
     
-    # Message History
+    # Message History Container
     chat_box = st.container(height=420)
     with chat_box:
         for msg in st.session_state["messages"]:
@@ -557,7 +484,7 @@ def render_ai_chatbot():
 
 # ----------------- MAIN LAYOUT RENDERER -----------------
 if st.session_state["show_assistant"]:
-    # 70% ERP Main View | 30% Chatbot on Right
+    # 70% Authentic Everest ERP | 30% AI Copilot
     col_main_erp, col_side_bot = st.columns([70, 30], gap="large")
     with col_main_erp:
         render_erp_content()
