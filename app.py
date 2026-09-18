@@ -2,8 +2,12 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 from datetime import date
-from database import get_database_status
-from query_engine import analyze_question
+from database import get_database_status, get_all_employees
+from query_engine import (
+    analyze_question,
+    audit_employee_responsibilities,
+    reassign_employee_roles
+)
 
 # Page Configuration
 st.set_page_config(
@@ -13,7 +17,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom Styling for ChatGPT-like appearance
+# Custom Styling
 st.markdown("""
 <style>
     .main-title {
@@ -34,6 +38,13 @@ st.markdown("""
     div[data-testid="stExpander"] {
         border-radius: 8px;
         border: 1px solid #e0e0e0;
+    }
+    .handover-box {
+        background-color: #fff3cd;
+        border-left: 5px solid #ffc107;
+        padding: 12px;
+        border-radius: 6px;
+        margin-bottom: 12px;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -83,11 +94,11 @@ with st.sidebar:
     
     st.subheader("💡 Quick Prompts")
     quick_prompts = [
-        "How many active projects and active jobs?",
+        "Who is PC, AM, SC and JC assigned to each project?",
         "Project-wise active jobs, allocated employees and logged hours",
-        "Show overdue billables and days delayed",
-        "Which employees have unreviewed timesheets?",
-        "What is our revenue collected vs billed?"
+        "Check if Mitesh Thakar has any jobs assigned",
+        "How many active projects and active jobs?",
+        "Show overdue billables and days delayed"
     ]
     
     selected_prompt = None
@@ -107,21 +118,96 @@ if "messages" not in st.session_state:
     st.session_state["messages"] = [
         {
             "role": "assistant",
-            "content": "👋 **Welcome to Everest AI!** I can answer any question about **active projects, in-progress jobs, allocated employees, logged timesheet hours, and financial billables** across your custom date ranges.",
+            "content": "👋 **Welcome to Everest AI!**\n\nYou can ask about:\n* **Project Governance:** Who is assigned as PC, AM, SC, and JC for each project, and whether billables are pending.\n* **Employee Exit & Handover:** Check what active jobs, allocations, or coordinator roles an exiting employee has.\n* **Deep Project Breakdown:** View active jobs, allocated employees, and logged hours across custom date ranges.",
             "data": None
         }
     ]
 
-# ----------------- MAIN CHAT VIEW -----------------
+# ----------------- MAIN VIEW -----------------
 st.markdown("<div class='main-title'>🏔️ Everest AI Assistant</div>", unsafe_allow_html=True)
-st.markdown("<div class='sub-title'>Deep-dive intelligence into 7Span projects, jobs, employee allocations, and hours</div>", unsafe_allow_html=True)
+st.markdown("<div class='sub-title'>Operations, Project Governance, and Employee Handover Management</div>", unsafe_allow_html=True)
 
-# Render Chat History
+# ----------------- INTERACTIVE EXIT & HANDOVER TOOL -----------------
+with st.expander("🔄 **Employee Exit / Layoff Handover Assistant (SOP Policy)**", expanded=False):
+    st.markdown("""
+    <div class='handover-box'>
+        <b>Everest Exit SOP Policy:</b> When an employee is exiting or laid off, safely audit their active responsibilities (PC, AM, SC, JC, or allocated jobs) and reassign them to a colleague in 1 click without data loss.
+    </div>
+    """, unsafe_allow_html=True)
+    
+    employees = get_all_employees()
+    emp_options = {f"{e['name']} ({e['role']} • {e['grade']})": e["id"] for e in employees}
+    
+    col_from, col_to = st.columns(2)
+    with col_from:
+        selected_from_label = st.selectbox("1. Select Exiting / Departing Employee:", list(emp_options.keys()), key="select_exit_emp")
+        from_id = emp_options[selected_from_label]
+        
+    with col_to:
+        # Filter out the exiting employee from successor list
+        successor_options = {k: v for k, v in emp_options.items() if v != from_id}
+        selected_to_label = st.selectbox("2. Select Successor / Replacement Colleague:", list(successor_options.keys()), key="select_successor_emp")
+        to_id = successor_options[selected_to_label]
+        
+    # Run Audit
+    audit_data = audit_employee_responsibilities(from_id)
+    
+    st.markdown(f"#### Active Responsibilities for **{selected_from_label.split('(')[0]}**:")
+    m1, m2, m3, m4 = st.columns(4)
+    with m1:
+        st.metric("Projects (as PC/AM/SC)", len(audit_data["projects_as_coordinator"]))
+    with m2:
+        st.metric("Active Jobs (as JC)", len(audit_data["jobs_as_jc"]))
+    with m3:
+        st.metric("Job Allocations", len(audit_data["allocated_jobs"]))
+    with m4:
+        st.metric("Unreviewed Hours", f"{audit_data['unreviewed_hours']}h")
+        
+    if audit_data["total_responsibilities"] > 0:
+        tabs = st.tabs(["Projects as Coordinator", "Jobs as JC", "Allocated Team Jobs"])
+        with tabs[0]:
+            if not audit_data["projects_as_coordinator"].empty:
+                st.dataframe(audit_data["projects_as_coordinator"], use_container_width=True)
+            else:
+                st.caption("No projects managed as PC/AM/SC.")
+        with tabs[1]:
+            if not audit_data["jobs_as_jc"].empty:
+                st.dataframe(audit_data["jobs_as_jc"], use_container_width=True)
+            else:
+                st.caption("No jobs managed as JC.")
+        with tabs[2]:
+            if not audit_data["allocated_jobs"].empty:
+                st.dataframe(audit_data["allocated_jobs"], use_container_width=True)
+            else:
+                st.caption("No active job allocations.")
+
+        # Reassign Action Button
+        reassign_choice = st.radio(
+            "Select responsibilities to transfer:",
+            ["All Responsibilities", "Only Coordinator Roles (PC, AM, SC, JC)", "Only Team Member Allocations"],
+            horizontal=True
+        )
+        
+        type_mapping = {
+            "All Responsibilities": "all",
+            "Only Coordinator Roles (PC, AM, SC, JC)": "jc",
+            "Only Team Member Allocations": "allocations"
+        }
+        
+        if st.button("🚀 Execute Safe Handover & Reassign in Database", type="primary", use_container_width=True):
+            result = reassign_employee_roles(from_id, to_id, type_mapping[reassign_choice])
+            st.success(f"✅ Handover Completed! {result['summary']}")
+            st.rerun()
+    else:
+        st.info("✅ This employee has no active projects, jobs, or allocations. Safe to offboard.")
+
+st.markdown("---")
+
+# ----------------- RENDER CHAT HISTORY -----------------
 for msg in st.session_state["messages"]:
     with st.chat_message(msg["role"], avatar="🧑‍💻" if msg["role"] == "user" else "🤖"):
         st.markdown(msg["content"])
         
-        # Render rich components if attached
         if msg.get("data"):
             data = msg["data"]
             
@@ -162,25 +248,21 @@ for msg in st.session_state["messages"]:
                     st.code(data["sql"], language="sql")
 
 # ----------------- INPUT HANDLING -----------------
-user_input = st.chat_input("Ask any question (e.g., 'Project wise active jobs and allocated employees' or 'How many active projects?')...")
+user_input = st.chat_input("Ask any question (e.g. 'Who is PC, AM, SC assigned to each project?' or 'Check if Mitesh Thakar has jobs')...")
 
-# If user clicked a sidebar prompt, use it
 if selected_prompt:
     user_input = selected_prompt
 
 if user_input:
-    # 1. Append User Message
     st.session_state["messages"].append({
         "role": "user",
         "content": user_input,
         "data": None
     })
     
-    # 2. Process with Query Engine (with active date range)
     with st.spinner("Analyzing Everest database..."):
         result = analyze_question(user_input, start_date=start_filter, end_date=end_filter)
     
-    # 3. Append Assistant Response
     st.session_state["messages"].append({
         "role": "assistant",
         "content": result["answer"],
