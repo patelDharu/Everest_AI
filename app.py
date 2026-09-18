@@ -288,9 +288,11 @@ for msg in st.session_state["messages"]:
                     with cols[i]:
                         st.metric(k, v)
             
-            # Data Table
+            # Optional Data Table (Not forced on every answer)
             if data.get("df") is not None and not data["df"].empty:
-                st.dataframe(data["df"], use_container_width=True)
+                show_open = data.get("show_table_open", False)
+                with st.expander("📊 View Detailed Data Table (Optional)", expanded=show_open):
+                    st.dataframe(data["df"], use_container_width=True)
             
             # Chart Visualization
             if data.get("chart_type") == "bar" and data.get("df") is not None and not data["df"].empty:
